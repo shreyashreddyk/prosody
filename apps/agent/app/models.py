@@ -260,3 +260,37 @@ class IceCandidateRecord(BaseModel):
 class SmallWebRTCPatchRequestModel(BaseModel):
     pc_id: str
     candidates: list[IceCandidateRecord] = Field(default_factory=list)
+
+
+# ── Generation Models ──
+
+
+class FlashcardRecord(BaseModel):
+    id: str
+    prompt: str
+    answer: str
+    tags: list[str] = Field(default_factory=list)
+
+
+class FlashcardSetRecord(BaseModel):
+    id: str
+    conversationId: str
+    sessionId: str
+    generatedAt: str
+    cards: list[FlashcardRecord]
+
+
+class ConversationSummaryRecord(BaseModel):
+    id: str
+    conversationId: str
+    summaryText: str
+    generatedAt: str
+
+
+class GenerateSummaryResponse(BaseModel):
+    summary: ConversationSummaryRecord
+
+
+class GenerateFlashcardsResponse(BaseModel):
+    flashcardSet: FlashcardSetRecord
+

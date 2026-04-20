@@ -1,0 +1,178 @@
+@import "tailwindcss";
+
+/* ──────────────────────────────────────────────────────────────
+   Prosody Design System — Tailwind v4 Theme Tokens
+   ────────────────────────────────────────────────────────────── */
+
+@theme {
+  /* ── Color Palette ── */
+  --color-bg-primary: #06090f;
+  --color-bg-surface-1: #0c1220;
+  --color-bg-surface-2: #111827;
+  --color-bg-surface-3: #1a2332;
+
+  --color-border-subtle: rgba(143, 167, 195, 0.12);
+  --color-border-default: rgba(143, 167, 195, 0.18);
+  --color-border-active: rgba(103, 214, 194, 0.7);
+
+  --color-text-primary: #f3f7fb;
+  --color-text-secondary: #9eb0c6;
+  --color-text-muted: #5d7290;
+
+  --color-accent-teal: #67d6c2;
+  --color-accent-blue: #5791ff;
+  --color-accent-amber: #ffc458;
+  --color-accent-red: #ff7070;
+  --color-accent-green: #45cf8d;
+
+  --color-surface-success: rgba(69, 207, 141, 0.12);
+  --color-surface-warning: rgba(255, 196, 88, 0.12);
+  --color-surface-danger: rgba(255, 112, 112, 0.12);
+  --color-surface-info: rgba(87, 145, 255, 0.12);
+
+  /* ── Typography ── */
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* ── Radius ── */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
+
+  /* ── Animations ── */
+  --animate-pulse-dot: pulse-dot 1.5s ease-in-out infinite;
+  --animate-fade-in: fade-in 0.3s ease-out;
+  --animate-slide-up: slide-up 0.35s ease-out;
+  --animate-spin-slow: spin 1.2s linear infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Base Layer
+   ────────────────────────────────────────────────────────────── */
+
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    background: var(--color-bg-primary);
+    background-image:
+      radial-gradient(circle at 15% 10%, rgba(58, 91, 173, 0.18), transparent 40%),
+      radial-gradient(circle at 85% 5%, rgba(60, 176, 150, 0.10), transparent 35%);
+    color: var(--color-text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+
+  a {
+    color: var(--color-accent-blue);
+  }
+
+  button, input, select, textarea {
+    font: inherit;
+  }
+
+  /* Scrollbar theming */
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(143, 167, 195, 0.2);
+    border-radius: var(--radius-full);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(143, 167, 195, 0.35);
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Component Layer — reusable patterns that aren't pure utilities
+   ────────────────────────────────────────────────────────────── */
+
+@layer components {
+  /* Gradient primary button */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2
+           rounded-lg px-5 py-2.5
+           font-semibold text-sm
+           border-0 cursor-pointer
+           transition-all duration-200;
+    background: linear-gradient(135deg, var(--color-accent-teal), var(--color-accent-blue));
+    color: #051019;
+  }
+  .btn-primary:hover {
+    filter: brightness(1.1);
+    transform: translateY(-1px);
+  }
+  .btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    filter: none;
+  }
+
+  /* Ghost / secondary button */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2
+           rounded-lg px-4 py-2
+           font-medium text-sm
+           cursor-pointer
+           transition-all duration-200;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--color-text-primary);
+    border: 1px solid var(--color-border-subtle);
+  }
+  .btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--color-border-default);
+  }
+  .btn-secondary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* Glass panel */
+  .glass-panel {
+    @apply rounded-xl p-5;
+    background: var(--color-bg-surface-1);
+    border: 1px solid var(--color-border-subtle);
+  }
+
+  .glass-panel-subtle {
+    @apply rounded-xl p-5;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+}

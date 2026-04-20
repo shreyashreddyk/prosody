@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from app.auth import SupabaseAuthenticator
 from app.api.routes import router as api_router
+from app.api.generation import router as generation_router
 from app.config import Settings
 from app.sessions.manager import SessionManager
 from app.storage.local_store import LocalSessionStore
@@ -37,3 +38,4 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(api_router)
+app.include_router(generation_router)

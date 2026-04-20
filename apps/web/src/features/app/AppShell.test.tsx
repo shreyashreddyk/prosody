@@ -10,18 +10,44 @@ const createConversationMock = vi.fn();
 const uploadSourceMock = vi.fn();
 
 vi.mock("../auth/AuthProvider", () => ({
-  useAuth: () => useAuthMock()
+  useAuth: () => useAuthMock(),
 }));
 
 vi.mock("./LiveSessionPanel", () => ({
-  LiveSessionPanel: () => <div>live-session-panel</div>
+  useLiveSession: () => ({
+    connectionState: "idle",
+    session: null,
+    transcriptRows: [],
+    turnTimings: [],
+    rollingMetrics: null,
+    degradationEvents: [],
+    replayStatus: { available: false },
+    errorMessage: null,
+    startSession: vi.fn(),
+    endSession: vi.fn(),
+  }),
+}));
+
+vi.mock("@prosody/ui", () => ({
+  Panel: ({ children, title }: { children: React.ReactNode; title?: string }) => (
+    <div>
+      {title && <p>{title}</p>}
+      {children}
+    </div>
+  ),
+  SectionTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
+  StatusBadge: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+  EmptyState: ({ heading }: { heading: string }) => <p>{heading}</p>,
+  LoadingSpinner: () => <span>spinner</span>,
+  LatencyBar: () => <div />,
+  IconButton: ({ children }: { children: React.ReactNode }) => <button>{children}</button>,
 }));
 
 vi.mock("./data", () => ({
   loadBootstrap: (...args: unknown[]) => loadBootstrapMock(...args),
   loadConversationWorkspace: (...args: unknown[]) => loadConversationWorkspaceMock(...args),
   createConversation: (...args: unknown[]) => createConversationMock(...args),
-  uploadSource: (...args: unknown[]) => uploadSourceMock(...args)
+  uploadSource: (...args: unknown[]) => uploadSourceMock(...args),
 }));
 
 describe("AppShell", () => {
@@ -29,7 +55,7 @@ describe("AppShell", () => {
     useAuthMock.mockReturnValue({
       user: { id: "user-1", email: "user@example.com" },
       session: { access_token: "token" },
-      signOut: vi.fn()
+      signOut: vi.fn(),
     });
     loadBootstrapMock.mockResolvedValue({
       profile: { id: "user-1", displayName: "Prosody User" },
@@ -40,13 +66,13 @@ describe("AppShell", () => {
             title: "Returning conversation",
             status: "active",
             createdAt: "2026-04-20T10:00:00Z",
-            updatedAt: "2026-04-20T10:05:00Z"
+            updatedAt: "2026-04-20T10:05:00Z",
           },
           sessionCount: 2,
-          sourceCount: 1
-        }
+          sourceCount: 1,
+        },
       ],
-      selectedConversationId: "conv-2"
+      selectedConversationId: "conv-2",
     });
     loadConversationWorkspaceMock.mockResolvedValue({
       conversation: {
@@ -54,7 +80,7 @@ describe("AppShell", () => {
         title: "Returning conversation",
         status: "active",
         createdAt: "2026-04-20T10:00:00Z",
-        updatedAt: "2026-04-20T10:05:00Z"
+        updatedAt: "2026-04-20T10:05:00Z",
       },
       sessions: [],
       sources: [
@@ -64,16 +90,16 @@ describe("AppShell", () => {
           kind: "document",
           filename: "resume.pdf",
           mimeType: "application/pdf",
-          processingStatus: "ready"
-        }
+          processingStatus: "ready",
+        },
       ],
       turns: [],
       summary: {
         id: "sum-1",
         conversationId: "conv-2",
         summaryText: "Welcome back summary",
-        generatedAt: "2026-04-20T10:05:00Z"
-      }
+        generatedAt: "2026-04-20T10:05:00Z",
+      },
     });
   });
 
@@ -94,6 +120,28 @@ describe("AppShell", () => {
 
     expect(screen.getAllByText("Returning conversation").length).toBeGreaterThan(0);
     expect(screen.getByText("resume.pdf")).toBeTruthy();
-    expect(screen.getByText("live-session-panel")).toBeTruthy();
+  });
+
+  it("shows the first-time user onboarding when there are no conversations", async () => {
+    loadBootstrapMock.mockResolvedValueOnce({
+      profile: { id: "user-1", displayName: "New User" },
+      conversations: [],
+      selectedConversationId: undefined,
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/app"]}>
+        <Routes>
+          <Route path="/app" element={<AppShell />} />
+          <Route path="/app/conversations/:conversationId" element={<AppShell />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(loadBootstrapMock).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Create your first workspace")).toBeTruthy();
   });
 });
