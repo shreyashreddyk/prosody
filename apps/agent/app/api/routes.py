@@ -117,6 +117,22 @@ async def create_offer(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/api/local/sessions/{session_id}/resume", response_model=LocalSessionCreateResponse)
+def resume_local_session(
+    session_id: str,
+    request: Request,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> LocalSessionCreateResponse:
+    try:
+        _store(request).ensure_session_owner(session_id, user.id)
+        base_url = str(request.base_url).rstrip("/")
+        return _manager(request).resume_session(base_url, session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.patch("/api/local/sessions/{session_id}/offer", status_code=204)
 async def patch_offer(
     session_id: str,

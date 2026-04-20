@@ -5,6 +5,7 @@ from typing import cast
 
 from app.metrics.latency import iso_now, parse_iso
 from app.models import (
+    DegradationEventRecord,
     LatencyEventRecord,
     ReplayArtifactRecord,
     RollingLatencyMetricsRecord,
@@ -72,6 +73,7 @@ def build_session_timeline(
         snapshot.sessionEvents,
         snapshot.transcriptEvents,
         snapshot.latencyEvents,
+        degradation_events,
         raw_timeline,
         snapshot.session.status,
         snapshot.session.endedAt,
@@ -99,6 +101,7 @@ def generate_replay_artifact(
         snapshot.sessionEvents,
         snapshot.transcriptEvents,
         snapshot.latencyEvents,
+        degradation_events,
         raw_timeline,
         snapshot.session.status,
         snapshot.session.endedAt,
@@ -123,11 +126,12 @@ def _build_artifacts(
     session_events: list[SessionEventRecord],
     transcript_events: list[TranscriptEventRecord],
     latency_events: list[LatencyEventRecord],
+    degradation_events: list[DegradationEventRecord],
     raw_timeline: list[SessionTimelineEventRecord],
     session_status: str,
     session_ended_at: str | None,
 ) -> SessionArtifacts:
-    timeline = _normalized_timeline(session_events, transcript_events, latency_events, raw_timeline)
+    timeline = _normalized_timeline(session_events, transcript_events, latency_events, degradation_events, raw_timeline)
     turn_timings = _build_turn_timings(transcript_events, latency_events, session_events, session_status, session_ended_at)
     rolling_metrics = _build_rolling_metrics(turn_timings)
     return SessionArtifacts(
@@ -141,6 +145,7 @@ def _normalized_timeline(
     session_events: list[SessionEventRecord],
     transcript_events: list[TranscriptEventRecord],
     latency_events: list[LatencyEventRecord],
+    degradation_events: list[DegradationEventRecord],
     raw_timeline: list[SessionTimelineEventRecord],
 ) -> list[SessionTimelineEventRecord]:
     if raw_timeline:
@@ -148,6 +153,32 @@ def _normalized_timeline(
             event.model_copy(update={"stage": normalize_latency_stage(event.stage) if event.stage else None})
             for event in raw_timeline
         ]
+        existing_ids = {event.id for event in normalized}
+        sequence = max((event.sequence for event in normalized), default=0) + 1
+        for event in sorted(degradation_events, key=lambda item: (item.createdAt, item.id)):
+            if event.id in existing_ids:
+                continue
+            normalized.append(
+                SessionTimelineEventRecord(
+                    id=event.id,
+                    conversationId=event.conversationId,
+                    sessionId=event.sessionId,
+                    turnId=event.turnId,
+                    kind="degradation",
+                    createdAt=event.createdAt,
+                    sequence=sequence,
+                    details={
+                        "category": event.category,
+                        "severity": event.severity,
+                        "provider": event.provider,
+                        "code": event.code,
+                        "message": event.message,
+                        "recoveredAt": event.recoveredAt,
+                        **(event.details or {}),
+                    },
+                )
+            )
+            sequence += 1
         return sorted(normalized, key=lambda item: (item.sequence, item.createdAt, item.id))
 
     derived: list[SessionTimelineEventRecord] = []
@@ -191,6 +222,28 @@ def _normalized_timeline(
                 createdAt=event.startedAt,
                 sequence=sequence,
                 details={"durationMs": event.durationMs},
+            )
+        )
+        sequence += 1
+    for event in sorted(degradation_events, key=lambda item: (item.createdAt, item.id)):
+        derived.append(
+            SessionTimelineEventRecord(
+                id=event.id,
+                conversationId=event.conversationId,
+                sessionId=event.sessionId,
+                turnId=event.turnId,
+                kind="degradation",
+                createdAt=event.createdAt,
+                sequence=sequence,
+                details={
+                    "category": event.category,
+                    "severity": event.severity,
+                    "provider": event.provider,
+                    "code": event.code,
+                    "message": event.message,
+                    "recoveredAt": event.recoveredAt,
+                    **(event.details or {}),
+                },
             )
         )
         sequence += 1

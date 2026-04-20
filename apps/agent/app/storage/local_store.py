@@ -62,6 +62,7 @@ class LocalSessionStore:
         (session_dir / "latency-events.jsonl").touch(exist_ok=True)
         (session_dir / "session-events.jsonl").touch(exist_ok=True)
         (session_dir / "timeline-events.jsonl").touch(exist_ok=True)
+        (session_dir / "degradation-events.jsonl").touch(exist_ok=True)
         return record
 
     def session_dir(self, conversation_id: str, session_id: str) -> Path:
@@ -146,6 +147,47 @@ class LocalSessionStore:
                 details={"durationMs": payload.durationMs},
             )
         )
+
+    def append_degradation_event(self, event: DegradationEventRecord) -> None:
+        self._append_jsonl(
+            self.session_dir(event.conversationId, event.sessionId) / "degradation-events.jsonl",
+            event.model_dump(),
+        )
+        self.append_timeline_event(
+            SessionTimelineEventRecord(
+                id=event.id,
+                conversationId=event.conversationId,
+                sessionId=event.sessionId,
+                turnId=event.turnId,
+                kind="degradation",
+                createdAt=event.createdAt,
+                sequence=self.next_timeline_sequence(event.conversationId, event.sessionId),
+                details={
+                    "category": event.category,
+                    "severity": event.severity,
+                    "provider": event.provider,
+                    "code": event.code,
+                    "message": event.message,
+                    "recoveredAt": event.recoveredAt,
+                    **(event.details or {}),
+                },
+            )
+        )
+
+    def recover_degradation_event(self, conversation_id: str, session_id: str, event_id: str, recovered_at: str) -> None:
+        path = self.session_dir(conversation_id, session_id) / "degradation-events.jsonl"
+        events = self._read_jsonl(path, DegradationEventRecord)
+        updated = False
+        next_events: list[dict] = []
+        for event in events:
+            if event.id == event_id and event.recoveredAt is None:
+                event = event.model_copy(update={"recoveredAt": recovered_at})
+                updated = True
+            next_events.append(event.model_dump())
+        if updated:
+            with path.open("w", encoding="utf-8") as handle:
+                for payload in next_events:
+                    handle.write(json.dumps(payload) + "\n")
 
     def append_timeline_event(self, event: SessionTimelineEventRecord) -> None:
         self._append_jsonl(

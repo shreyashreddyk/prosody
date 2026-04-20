@@ -1,5 +1,5 @@
 export type TransportKind = "smallwebrtc" | "daily";
-export type SessionStatus = "idle" | "connecting" | "live" | "ended" | "failed";
+export type SessionStatus = "idle" | "connecting" | "reconnecting" | "live" | "ended" | "failed";
 
 export interface Session {
   id: string;

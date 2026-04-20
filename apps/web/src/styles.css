@@ -186,6 +186,37 @@ input {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.degradation-badge-row,
+.resilience-list {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.degradation-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+
+.degradation-warning {
+  background: rgba(255, 196, 88, 0.14);
+  color: #ffd98d;
+}
+
+.degradation-critical {
+  background: rgba(255, 112, 112, 0.14);
+  color: #ffabab;
+}
+
+.degradation-info {
+  background: rgba(103, 214, 194, 0.14);
+  color: #98efdb;
+}
+
 .transcript-user {
   border: 1px solid rgba(92, 160, 255, 0.18);
 }

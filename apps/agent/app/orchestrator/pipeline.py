@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import uuid
 
 from pipecat.frames.frames import (
@@ -25,6 +26,7 @@ from app.config import Settings
 from app.metrics.latency import LatencyRecorder
 from app.models import SessionEventRecord, TranscriptEventRecord
 from app.providers.factory import ProviderBundle
+from app.resilience import SessionResilienceCoordinator
 from app.storage.base import SessionStore
 from app.storage.local_store import iso_now
 from app.transports.local_webrtc import build_smallwebrtc_transport
@@ -38,23 +40,33 @@ class SessionObserver(BaseObserver):
         latency: LatencyRecorder,
         conversation_id: str,
         session_id: str,
+        resilience: SessionResilienceCoordinator,
     ):
         super().__init__()
         self._store = store
         self._latency = latency
         self._conversation_id = conversation_id
         self._session_id = session_id
+        self._resilience = resilience
         self._active_turn_id: str | None = None
         self._assistant_text_parts: list[str] = []
         self._assistant_transcript_persisted = False
+        self._suppress_until_next_user_audio = False
 
     async def on_push_frame(self, data: FramePushed):
         frame = data.frame
+
+        if isinstance(frame, InputAudioRawFrame) and self._suppress_until_next_user_audio and self._active_turn_id is None:
+            self._suppress_until_next_user_audio = False
+
+        if self._suppress_until_next_user_audio and self._active_turn_id is None and not isinstance(frame, InputAudioRawFrame):
+            return
 
         if isinstance(frame, InterimTranscriptionFrame):
             turn_id = self._ensure_turn()
             created_at = getattr(frame, "timestamp", None) or iso_now()
             self._latency.record_stage("first_asr_partial", turn_id=turn_id, occurred_at=created_at)
+            self._resilience.on_asr_partial(turn_id)
             self._store.append_transcript_event(
                 TranscriptEventRecord(
                     id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -72,12 +84,14 @@ class SessionObserver(BaseObserver):
         if isinstance(frame, InputAudioRawFrame):
             turn_id = self._ensure_turn()
             self._latency.record_stage("first_user_audio", turn_id=turn_id)
+            self._resilience.on_first_user_audio(turn_id)
             return
 
         if isinstance(frame, TranscriptionFrame):
             turn_id = self._ensure_turn()
             created_at = getattr(frame, "timestamp", None) or iso_now()
             self._latency.record_stage("final_asr", turn_id=turn_id, occurred_at=created_at)
+            self._resilience.on_final_asr(turn_id)
             self._store.append_transcript_event(
                 TranscriptEventRecord(
                     id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -105,23 +119,27 @@ class SessionObserver(BaseObserver):
         if isinstance(frame, LLMFullResponseStartFrame):
             turn_id = self._ensure_turn()
             self._latency.record_stage("llm_request_start", turn_id=turn_id)
+            self._resilience.on_llm_request_start(turn_id)
             return
 
         if isinstance(frame, LLMTextFrame):
             turn_id = self._ensure_turn()
             self._assistant_text_parts.append(frame.text)
             self._latency.record_stage("llm_first_token", turn_id=turn_id)
+            self._resilience.on_llm_first_token(turn_id)
             return
 
         if isinstance(frame, TTSStartedFrame):
             turn_id = self._ensure_turn()
             self._latency.record_stage("tts_request_start", turn_id=turn_id)
+            self._resilience.on_tts_request_start(turn_id)
             return
 
         if isinstance(frame, TTSAudioRawFrame):
             turn_id = self._ensure_turn()
             self._latency.record_stage("tts_first_byte", turn_id=turn_id)
             self._latency.record_stage("playback_start", turn_id=turn_id)
+            self._resilience.on_tts_first_byte(turn_id)
             return
 
         if isinstance(frame, LLMFullResponseEndFrame):
@@ -144,12 +162,31 @@ class SessionObserver(BaseObserver):
         if self._active_turn_id is None:
             return
 
+        active_turn_id = self._active_turn_id
         created_at = iso_now()
         self._persist_assistant_transcript(status=status, created_at=created_at)
         self._latency.record_stage("turn_completed", turn_id=self._active_turn_id, occurred_at=created_at)
+        self._resilience.on_turn_finished(active_turn_id)
         self._active_turn_id = None
         self._assistant_text_parts = []
         self._assistant_transcript_persisted = False
+
+    async def handle_asr_timeout(self, turn_id: str, _event) -> None:
+        if self._active_turn_id != turn_id:
+            return
+        self._complete_fallback_turn("I didn't catch that. Please repeat that answer.")
+
+    async def handle_llm_timeout(self, turn_id: str, _event) -> None:
+        if self._active_turn_id != turn_id:
+            return
+        self._complete_fallback_turn("I'm having trouble responding fully right now. Give me one more try.")
+
+    async def handle_tts_timeout(self, turn_id: str, _event) -> None:
+        if self._active_turn_id != turn_id:
+            return
+        if not "".join(self._assistant_text_parts).strip():
+            self._assistant_text_parts = ["I'm having trouble speaking right now, but I'll keep responding in text."]
+        self._complete_fallback_turn(None)
 
     def _persist_assistant_transcript(self, *, status: str, created_at: str) -> None:
         if self._assistant_transcript_persisted or self._active_turn_id is None:
@@ -182,6 +219,15 @@ class SessionObserver(BaseObserver):
         )
         self._assistant_transcript_persisted = True
 
+    def _complete_fallback_turn(self, fallback_text: str | None) -> None:
+        if self._active_turn_id is None:
+            return
+        if fallback_text is not None:
+            self._assistant_text_parts = [fallback_text]
+            self._assistant_transcript_persisted = False
+        self._suppress_until_next_user_audio = True
+        self.flush_active_turn(status="complete")
+
     def _ensure_turn(self) -> str:
         if self._active_turn_id is None:
             self._active_turn_id = f"turn_{uuid.uuid4().hex[:12]}"
@@ -199,6 +245,9 @@ def build_session_task(
     session_id: str,
     session_started_at: str | None,
     webrtc_connection,
+    resilience: SessionResilienceCoordinator,
+    on_transport_connected=None,
+    on_transport_disconnected=None,
 ):
     latency = LatencyRecorder(store, conversation_id, session_id)
     if session_started_at:
@@ -214,6 +263,7 @@ def build_session_task(
         latency=latency,
         conversation_id=conversation_id,
         session_id=session_id,
+        resilience=resilience,
     )
 
     @transport.event_handler("on_client_connected")
@@ -228,6 +278,17 @@ def build_session_task(
                 createdAt=iso_now(),
             )
         )
+        if on_transport_connected:
+            result = on_transport_connected()
+            if inspect.isawaitable(result):
+                await result
+
+    @transport.event_handler("on_client_disconnected")
+    async def on_client_disconnected(_transport, _connection):
+        if on_transport_disconnected:
+            result = on_transport_disconnected()
+            if inspect.isawaitable(result):
+                await result
 
     context = LLMContext(
         messages=[

@@ -37,14 +37,24 @@ export interface SessionTimelineEvent {
 
 export type DegradationCategory = "transport" | "provider" | "latency" | "source_processing";
 export type DegradationSeverity = "info" | "warning" | "critical";
+export type DegradationProvider = "asr" | "llm" | "tts" | "transport";
+export type DegradationCode =
+  | "asr_stall"
+  | "llm_timeout"
+  | "tts_timeout"
+  | "transport_disconnect";
 
 export interface DegradationEvent {
   id: string;
   conversationId: string;
   sessionId: string;
+  turnId?: string;
   category: DegradationCategory;
   severity: DegradationSeverity;
+  provider?: DegradationProvider;
+  code: DegradationCode;
   message: string;
+  details?: Record<string, string | number | boolean | null>;
   createdAt: string;
   recoveredAt?: string;
 }
@@ -52,6 +62,7 @@ export interface DegradationEvent {
 export type RealtimeConnectionState =
   | "idle"
   | "connecting"
+  | "reconnecting"
   | "connected"
   | "live"
   | "ending"
@@ -75,6 +86,9 @@ export type SessionEventType =
   | "session_started"
   | "session_ended"
   | "transport_connected"
+  | "transport_disconnected"
+  | "transport_reconnecting"
+  | "transport_resumed"
   | "transport_failed";
 
 export interface SessionEvent {

@@ -24,6 +24,10 @@ class Settings:
     input_sample_rate: int
     output_sample_rate: int
     session_idle_timeout_secs: float
+    asr_stall_timeout_secs: float
+    llm_timeout_secs: float
+    tts_timeout_secs: float
+    transport_disconnect_grace_secs: float
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -53,4 +57,8 @@ class Settings:
             input_sample_rate=int(os.getenv("AUDIO_INPUT_SAMPLE_RATE", "16000")),
             output_sample_rate=int(os.getenv("AUDIO_OUTPUT_SAMPLE_RATE", "24000")),
             session_idle_timeout_secs=float(os.getenv("SESSION_IDLE_TIMEOUT_SECS", "90")),
+            asr_stall_timeout_secs=float(os.getenv("ASR_STALL_TIMEOUT_SECS", "4")),
+            llm_timeout_secs=float(os.getenv("LLM_TIMEOUT_SECS", "8")),
+            tts_timeout_secs=float(os.getenv("TTS_TIMEOUT_SECS", "6")),
+            transport_disconnect_grace_secs=float(os.getenv("TRANSPORT_DISCONNECT_GRACE_SECS", "20")),
         )

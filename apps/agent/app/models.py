@@ -47,7 +47,7 @@ class SessionRecord(BaseModel):
     id: str
     conversationId: str
     transportKind: Literal["smallwebrtc", "daily"] = "smallwebrtc"
-    status: Literal["idle", "connecting", "live", "ended", "failed"] = "idle"
+    status: Literal["idle", "connecting", "reconnecting", "live", "ended", "failed"] = "idle"
     startedAt: str | None = None
     endedAt: str | None = None
     createdAt: str | None = None
@@ -64,7 +64,15 @@ class SessionEventRecord(BaseModel):
     id: str
     conversationId: str
     sessionId: str
-    type: Literal["session_started", "session_ended", "transport_connected", "transport_failed"]
+    type: Literal[
+        "session_started",
+        "session_ended",
+        "transport_connected",
+        "transport_disconnected",
+        "transport_reconnecting",
+        "transport_resumed",
+        "transport_failed",
+    ]
     createdAt: str
     details: dict[str, str | int | float | bool | None] | None = None
 
@@ -168,9 +176,13 @@ class DegradationEventRecord(BaseModel):
     id: str
     conversationId: str
     sessionId: str
+    turnId: str | None = None
     category: Literal["transport", "provider", "latency", "source_processing"]
     severity: Literal["info", "warning", "critical"]
+    provider: Literal["asr", "llm", "tts", "transport"] | None = None
+    code: Literal["asr_stall", "llm_timeout", "tts_timeout", "transport_disconnect"]
     message: str
+    details: dict[str, str | int | float | bool | None] | None = None
     createdAt: str
     recoveredAt: str | None = None
 

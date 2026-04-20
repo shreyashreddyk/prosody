@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { PipecatClient, type RTVIMessage, type TransportState } from "@pipecat-ai/client-js";
 import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
 import type {
+  DegradationEvent,
   LatencyEvent,
   ReplayArtifactStatus,
   RealtimeConnectionState,
@@ -28,6 +29,7 @@ type LocalSessionEventsResponse = {
 
 type TranscriptRow = {
   id: string;
+  turnId: string;
   role: "user" | "assistant";
   text: string;
   final: boolean;
@@ -74,6 +76,7 @@ function mergeTranscriptEvents(events: TranscriptEvent[]): TranscriptRow[] {
     const key = `${event.turnId}:${event.role}`;
     rows.set(key, {
       id: key,
+      turnId: event.turnId,
       role: event.role,
       text: event.text,
       final: event.kind === "final",
@@ -93,6 +96,19 @@ function formatMs(value?: number) {
   return value == null ? "--" : `${Math.round(value)} ms`;
 }
 
+function degradationBadgeLabel(code: DegradationEvent["code"]) {
+  if (code === "asr_stall") {
+    return "ASR retry";
+  }
+  if (code === "llm_timeout") {
+    return "LLM fallback";
+  }
+  if (code === "tts_timeout") {
+    return "Text only";
+  }
+  return "Reconnect";
+}
+
 export function LiveSessionPanel({
   accessToken,
   conversationId,
@@ -106,8 +122,10 @@ export function LiveSessionPanel({
   const [transcriptRows, setTranscriptRows] = useState<TranscriptRow[]>([]);
   const [turnTimings, setTurnTimings] = useState<TurnTimingRecord[]>([]);
   const [rollingMetrics, setRollingMetrics] = useState<RollingLatencyMetrics | null>(null);
+  const [degradationEvents, setDegradationEvents] = useState<DegradationEvent[]>([]);
   const [replayStatus, setReplayStatus] = useState<ReplayArtifactStatus>({ available: false });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const resumeInFlightRef = useRef(false);
 
   const activeSessionId = session?.id ?? selectedSessionId;
 
@@ -128,6 +146,9 @@ export function LiveSessionPanel({
     }
     const payload = (await response.json()) as LocalSessionEventsResponse;
     setSession(payload.session);
+    if (payload.session.status === "reconnecting") {
+      setConnectionState("reconnecting");
+    }
     setTranscriptRows(mergeTranscriptEvents(payload.transcriptEvents));
   };
 
@@ -139,9 +160,102 @@ export function LiveSessionPanel({
       throw new Error("Unable to load metrics");
     }
     const payload = (await response.json()) as SessionTimelineResponse;
+    setSession(payload.session);
     setTurnTimings(payload.turnTimings);
     setRollingMetrics(payload.rollingMetrics);
+    setDegradationEvents(payload.degradationEvents);
     setReplayStatus(payload.replayArtifactStatus);
+  };
+
+  const connectClient = async (offerEndpoint: string) => {
+    const client = new PipecatClient({
+      transport: new SmallWebRTCTransport(),
+      enableMic: true,
+      enableCam: false,
+      callbacks: {
+        onTransportStateChanged: (state) => {
+          setConnectionState(mapTransportState(state));
+        },
+        onBotReady: () => {
+          setConnectionState("live");
+        },
+        onUserTranscript: (data) => {
+          upsertRow({
+            id: `live:user:${data.timestamp}`,
+            turnId: `live:user:${data.timestamp}`,
+            role: "user",
+            text: data.text,
+            final: data.final,
+            createdAt: data.timestamp
+          });
+        },
+        onBotLlmStarted: () => {
+          upsertRow({
+            id: "assistant-live",
+            turnId: session?.id ?? "assistant-live",
+            role: "assistant",
+            text: "",
+            final: false,
+            createdAt: new Date().toISOString()
+          });
+        },
+        onBotLlmText: (data) => {
+          setTranscriptRows((current) =>
+            current.map((row) =>
+              row.id === "assistant-live"
+                ? { ...row, text: `${row.text}${data.text}`, final: false }
+                : row
+            )
+          );
+        },
+        onBotLlmStopped: () => {
+          setTranscriptRows((current) =>
+            current.map((row) => (row.id === "assistant-live" ? { ...row, final: true } : row))
+          );
+        },
+        onError: (message: RTVIMessage) => {
+          setErrorMessage((message.data as { message?: string } | undefined)?.message ?? "Session failed");
+        }
+      }
+    });
+
+    clientRef.current = client;
+    await client.connect({
+      webrtcRequestParams: {
+        endpoint: offerEndpoint
+      }
+    });
+  };
+
+  const handleResume = async (sessionId: string) => {
+    if (resumeInFlightRef.current) {
+      return;
+    }
+    resumeInFlightRef.current = true;
+    setConnectionState("reconnecting");
+
+    try {
+      if (clientRef.current) {
+        await clientRef.current.disconnect();
+        clientRef.current = null;
+      }
+      const response = await fetch(`${getAgentBaseUrl()}/api/local/sessions/${sessionId}/resume`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (!response.ok) {
+        throw new Error("Unable to resume the live session");
+      }
+      const payload = (await response.json()) as LocalSessionCreateResponse;
+      setSession(payload.session);
+      await connectClient(payload.offerEndpoint);
+      await fetchEvents(payload.session.id);
+      await fetchTimeline(payload.session.id);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to resume the live session");
+    } finally {
+      resumeInFlightRef.current = false;
+    }
   };
 
   useEffect(() => {
@@ -182,6 +296,12 @@ export function LiveSessionPanel({
     };
   }, []);
 
+  useEffect(() => {
+    if (session?.status === "reconnecting" && activeSessionId && connectionState !== "connecting" && connectionState !== "live") {
+      void handleResume(activeSessionId);
+    }
+  }, [session?.status, activeSessionId, connectionState]);
+
   const handleStart = async () => {
     setErrorMessage(null);
     setConnectionState("connecting");
@@ -205,64 +325,10 @@ export function LiveSessionPanel({
       setTranscriptRows([]);
       setTurnTimings([]);
       setRollingMetrics(null);
+      setDegradationEvents([]);
       onSessionCreated(payload.session);
 
-      const client = new PipecatClient({
-        transport: new SmallWebRTCTransport(),
-        enableMic: true,
-        enableCam: false,
-        callbacks: {
-          onTransportStateChanged: (state) => {
-            setConnectionState(mapTransportState(state));
-          },
-          onBotReady: () => {
-            setConnectionState("live");
-          },
-          onUserTranscript: (data) => {
-            upsertRow({
-              id: `live:user:${data.timestamp}`,
-              role: "user",
-              text: data.text,
-              final: data.final,
-              createdAt: data.timestamp
-            });
-          },
-          onBotLlmStarted: () => {
-            upsertRow({
-              id: "assistant-live",
-              role: "assistant",
-              text: "",
-              final: false,
-              createdAt: new Date().toISOString()
-            });
-          },
-          onBotLlmText: (data) => {
-            setTranscriptRows((current) =>
-              current.map((row) =>
-                row.id === "assistant-live"
-                  ? { ...row, text: `${row.text}${data.text}`, final: false }
-                  : row
-              )
-            );
-          },
-          onBotLlmStopped: () => {
-            setTranscriptRows((current) =>
-              current.map((row) => (row.id === "assistant-live" ? { ...row, final: true } : row))
-            );
-          },
-          onError: (message: RTVIMessage) => {
-            setConnectionState("failed");
-            setErrorMessage((message.data as { message?: string } | undefined)?.message ?? "Session failed");
-          }
-        }
-      });
-
-      clientRef.current = client;
-      await client.connect({
-        webrtcRequestParams: {
-          endpoint: payload.offerEndpoint
-        }
-      });
+      await connectClient(payload.offerEndpoint);
       await fetchEvents(payload.session.id);
       await fetchTimeline(payload.session.id);
     } catch (error) {
@@ -294,12 +360,29 @@ export function LiveSessionPanel({
   };
 
   const latest = latestTurn(turnTimings);
+  const activeDegradations = degradationEvents.filter((event) => !event.recoveredAt);
+  const recoveredDegradations = degradationEvents.filter((event) => event.recoveredAt);
+  const badgesByTurn = degradationEvents.reduce<Record<string, DegradationEvent[]>>((acc, event) => {
+    if (!event.turnId) {
+      return acc;
+    }
+    acc[event.turnId] = [...(acc[event.turnId] ?? []), event];
+    return acc;
+  }, {});
 
   return (
     <div className="live-session-stack">
       <Panel title="Live Voice Controls">
         <div className="session-toolbar">
-          <StatusBadge tone={connectionState === "failed" ? "danger" : connectionState === "live" ? "success" : "warning"}>
+          <StatusBadge
+            tone={
+              connectionState === "failed"
+                ? "danger"
+                : connectionState === "live"
+                  ? "success"
+                  : "warning"
+            }
+          >
             {connectionState}
           </StatusBadge>
           <div className="session-toolbar-actions">
@@ -324,6 +407,16 @@ export function LiveSessionPanel({
                 {!row.final ? " · live" : ""}
               </p>
               <p>{row.text}</p>
+              {badgesByTurn[row.turnId]?.length ? (
+                <div className="degradation-badge-row">
+                  {badgesByTurn[row.turnId].map((event) => (
+                    <span key={event.id} className={`degradation-badge degradation-${event.severity}`}>
+                      {degradationBadgeLabel(event.code)}
+                      {event.recoveredAt ? " · recovered" : ""}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </article>
           ))}
         </div>
@@ -347,6 +440,25 @@ export function LiveSessionPanel({
         {rollingMetrics ? (
           <p className="muted-copy">
             Rolling turn completion p50: {formatMs(rollingMetrics.turnCompleted.p50Ms)} · p95: {formatMs(rollingMetrics.turnCompleted.p95Ms)}
+          </p>
+        ) : null}
+        {session?.status === "reconnecting" ? (
+          <p className="muted-copy">Reconnect in progress. Prosody is attempting to resume the same session.</p>
+        ) : null}
+        {activeDegradations.length ? (
+          <div className="resilience-list">
+            {activeDegradations.map((event) => (
+              <p key={event.id} className="muted-copy">
+                {degradationBadgeLabel(event.code)} · {event.message}
+              </p>
+            ))}
+          </div>
+        ) : (
+          <p className="muted-copy">No active degraded state markers.</p>
+        )}
+        {recoveredDegradations.length ? (
+          <p className="muted-copy">
+            Recovered: {recoveredDegradations.map((event) => degradationBadgeLabel(event.code)).join(", ")}
           </p>
         ) : null}
       </Panel>

@@ -28,9 +28,18 @@ from app.models import (
 )
 from app.orchestrator.pipeline import build_session_task
 from app.providers.factory import ProviderFactory
+from app.resilience import ResiliencePolicy, SessionResilienceCoordinator
 from app.replay.service import build_session_timeline, generate_replay_artifact
 from app.storage.base import SessionStore
 from app.storage.local_store import iso_now
+
+
+async def _noop_fallback(_turn_id: str, _event) -> None:
+    return None
+
+
+async def _noop_async() -> None:
+    return None
 
 
 @dataclass
@@ -41,6 +50,7 @@ class RealtimeSession:
     runner: Any = None
     runner_task: asyncio.Task | None = None
     observer: Any = None
+    resilience: SessionResilienceCoordinator | None = None
 
 
 class SessionManager:
@@ -48,6 +58,12 @@ class SessionManager:
         self._settings = settings
         self._store = store
         self._providers = ProviderFactory(settings)
+        self._policy = ResiliencePolicy(
+            asr_stall_timeout_secs=settings.asr_stall_timeout_secs,
+            llm_timeout_secs=settings.llm_timeout_secs,
+            tts_timeout_secs=settings.tts_timeout_secs,
+            transport_disconnect_grace_secs=settings.transport_disconnect_grace_secs,
+        )
         self._sessions: dict[str, RealtimeSession] = {}
 
     def create_session(
@@ -80,9 +96,15 @@ class SessionManager:
         )
         self._sessions[session.id] = RealtimeSession(
             session=session,
-            request_handler=SmallWebRTCRequestHandler(
-                ice_servers=self._settings.smallwebrtc_ice_servers,
-                connection_mode=ConnectionMode.SINGLE,
+            request_handler=self._build_request_handler(),
+            resilience=SessionResilienceCoordinator(
+                policy=self._policy,
+                store=self._store,
+                session=session,
+                on_asr_timeout=_noop_fallback,
+                on_llm_timeout=_noop_fallback,
+                on_tts_timeout=_noop_fallback,
+                on_disconnect_expired=_noop_async,
             ),
         )
         return LocalSessionCreateResponse(
@@ -96,6 +118,16 @@ class SessionManager:
         payload = SmallWebRTCRequest.from_dict(request.model_dump(exclude_none=True))
 
         async def create_pipeline(webrtc_connection) -> None:
+            if realtime.resilience is None:
+                realtime.resilience = SessionResilienceCoordinator(
+                    policy=self._policy,
+                    store=self._store,
+                    session=realtime.session,
+                    on_asr_timeout=_noop_fallback,
+                    on_llm_timeout=_noop_fallback,
+                    on_tts_timeout=_noop_fallback,
+                    on_disconnect_expired=_noop_async,
+                )
             transport, task, runner, observer = build_session_task(
                 settings=self._settings,
                 providers=self._providers.build(),
@@ -104,15 +136,26 @@ class SessionManager:
                 session_id=realtime.session.id,
                 session_started_at=realtime.session.startedAt,
                 webrtc_connection=webrtc_connection,
+                resilience=realtime.resilience,
+                on_transport_connected=lambda: self._on_transport_connected(realtime),
+                on_transport_disconnected=lambda: self._on_transport_disconnected(realtime),
             )
             realtime.task = task
             realtime.runner = runner
             realtime.observer = observer
+            realtime.resilience.set_callbacks(
+                on_asr_timeout=observer.handle_asr_timeout,
+                on_llm_timeout=observer.handle_llm_timeout,
+                on_tts_timeout=observer.handle_tts_timeout,
+                on_disconnect_expired=lambda: self._expire_reconnect(realtime),
+            )
 
             @task.event_handler("on_pipeline_finished")
             async def on_pipeline_finished(_task, _frame):
                 if realtime.observer:
                     realtime.observer.flush_active_turn(status="partial")
+                if realtime.session.status == "reconnecting":
+                    return
                 realtime.session.status = "ended"
                 realtime.session.endedAt = iso_now()
                 self._store.save_session(realtime.session)
@@ -122,6 +165,8 @@ class SessionManager:
             async def on_pipeline_error(_task, frame):
                 if realtime.observer:
                     realtime.observer.flush_active_turn(status="failed")
+                if realtime.session.status == "reconnecting":
+                    return
                 realtime.session.status = "failed"
                 realtime.session.endedAt = iso_now()
                 self._store.save_session(realtime.session)
@@ -147,6 +192,17 @@ class SessionManager:
         self._store.save_session(realtime.session)
         return SmallWebRTCOfferResponse.model_validate(answer)
 
+    def resume_session(self, base_url: str, session_id: str) -> LocalSessionCreateResponse:
+        realtime = self._require_session(session_id)
+        if realtime.session.status != "reconnecting":
+            raise ValueError("Session is not waiting for reconnect")
+        realtime.request_handler = self._build_request_handler()
+        return LocalSessionCreateResponse(
+            conversationId=realtime.session.conversationId,
+            session=realtime.session,
+            offerEndpoint=f"{base_url}/api/local/sessions/{realtime.session.id}/offer",
+        )
+
     async def handle_patch(self, session_id: str, request: SmallWebRTCPatchRequestModel) -> None:
         realtime = self._require_session(session_id)
         await realtime.request_handler.handle_patch_request(
@@ -168,6 +224,8 @@ class SessionManager:
             except asyncio.TimeoutError:
                 realtime.runner_task.cancel()
         await realtime.request_handler.close()
+        if realtime.resilience:
+            realtime.resilience.close()
         realtime.session.status = "ended"
         realtime.session.endedAt = iso_now()
         self._store.save_session(realtime.session)
@@ -204,10 +262,7 @@ class SessionManager:
             session = self._store.load_session_by_id(session_id)
             realtime = RealtimeSession(
                 session=session,
-                request_handler=SmallWebRTCRequestHandler(
-                    ice_servers=self._settings.smallwebrtc_ice_servers,
-                    connection_mode=ConnectionMode.SINGLE,
-                ),
+                request_handler=self._build_request_handler(),
             )
             self._sessions[session_id] = realtime
         realtime = self._sessions.get(session_id)
@@ -229,3 +284,79 @@ class SessionManager:
                     details={"message": f"Replay artifact generation failed: {exc}"},
                 )
             )
+
+    def _build_request_handler(self) -> SmallWebRTCRequestHandler:
+        return SmallWebRTCRequestHandler(
+            ice_servers=self._settings.smallwebrtc_ice_servers,
+            connection_mode=ConnectionMode.SINGLE,
+        )
+
+    async def _on_transport_connected(self, realtime: RealtimeSession) -> None:
+        if realtime.session.status == "reconnecting":
+            if realtime.resilience:
+                realtime.resilience.on_transport_resumed()
+            self._store.append_session_event(
+                SessionEventRecord(
+                    id=f"evt_{uuid.uuid4().hex[:12]}",
+                    conversationId=realtime.session.conversationId,
+                    sessionId=realtime.session.id,
+                    type="transport_resumed",
+                    createdAt=iso_now(),
+                )
+            )
+        realtime.session.status = "live"
+        self._store.save_session(realtime.session)
+
+    async def _on_transport_disconnected(self, realtime: RealtimeSession) -> None:
+        self._store.append_session_event(
+            SessionEventRecord(
+                id=f"evt_{uuid.uuid4().hex[:12]}",
+                conversationId=realtime.session.conversationId,
+                sessionId=realtime.session.id,
+                type="transport_disconnected",
+                createdAt=iso_now(),
+            )
+        )
+        self._store.append_session_event(
+            SessionEventRecord(
+                id=f"evt_{uuid.uuid4().hex[:12]}",
+                conversationId=realtime.session.conversationId,
+                sessionId=realtime.session.id,
+                type="transport_reconnecting",
+                createdAt=iso_now(),
+            )
+        )
+        if realtime.observer:
+            realtime.observer.flush_active_turn(status="partial")
+        if realtime.resilience:
+            realtime.resilience.on_transport_disconnected()
+        if realtime.runner_task and not realtime.runner_task.done():
+            realtime.runner_task.cancel()
+        try:
+            await realtime.request_handler.close()
+        except Exception:
+            pass
+        realtime.task = None
+        realtime.runner = None
+        realtime.runner_task = None
+        realtime.observer = None
+        realtime.session.status = "reconnecting"
+        self._store.save_session(realtime.session)
+
+    async def _expire_reconnect(self, realtime: RealtimeSession) -> None:
+        if realtime.observer:
+            realtime.observer.flush_active_turn(status="failed")
+        realtime.session.status = "failed"
+        realtime.session.endedAt = iso_now()
+        self._store.save_session(realtime.session)
+        self._store.append_session_event(
+            SessionEventRecord(
+                id=f"evt_{uuid.uuid4().hex[:12]}",
+                conversationId=realtime.session.conversationId,
+                sessionId=realtime.session.id,
+                type="transport_failed",
+                createdAt=realtime.session.endedAt,
+                details={"message": "Reconnect grace window expired"},
+            )
+        )
+        self._finalize_artifacts(realtime.session)

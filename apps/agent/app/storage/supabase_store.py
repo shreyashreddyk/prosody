@@ -200,6 +200,37 @@ class SupabaseSessionStore:
             if field_name and self._get("turns", params={"select": "id", "id": f"eq.{event.turnId}", "limit": "1"}):
                 self._patch("turns", {field_name: event.startedAt, "updated_at": event.startedAt}, {"id": f"eq.{event.turnId}"})
 
+    def append_degradation_event(self, event: DegradationEventRecord) -> None:
+        self._post(
+            "degradation_events",
+            {
+                "id": event.id,
+                "conversation_id": event.conversationId,
+                "session_id": event.sessionId,
+                "owner_user_id": self._session_owner_id(event.sessionId),
+                "turn_id": event.turnId,
+                "category": event.category,
+                "severity": event.severity,
+                "provider": event.provider,
+                "code": event.code,
+                "message": event.message,
+                "details": event.details or {},
+                "created_at": event.createdAt,
+                "recovered_at": event.recoveredAt,
+            },
+        )
+
+    def recover_degradation_event(self, conversation_id: str, session_id: str, event_id: str, recovered_at: str) -> None:
+        self._patch(
+            "degradation_events",
+            {"recovered_at": recovered_at},
+            {
+                "id": f"eq.{event_id}",
+                "conversation_id": f"eq.{conversation_id}",
+                "session_id": f"eq.{session_id}",
+            },
+        )
+
     def append_timeline_event(self, event: SessionTimelineEventRecord) -> None:
         return None
 
@@ -260,11 +291,15 @@ class SupabaseSessionStore:
                 id=row["id"],
                 conversationId=row["conversation_id"],
                 sessionId=row["session_id"],
-                category=row.get("reason", "provider"),
+                turnId=row.get("turn_id"),
+                category=row.get("category", row.get("reason", "provider")),
                 severity=row.get("severity", "warning"),
+                provider=row.get("provider"),
+                code=row.get("code", "transport_disconnect"),
                 message=row["message"],
-                createdAt=row.get("timestamp", iso_now()),
-                recoveredAt=row.get("recovery"),
+                details=row.get("details") or {},
+                createdAt=row.get("created_at", row.get("timestamp", iso_now())),
+                recoveredAt=row.get("recovered_at", row.get("recovery")),
             )
             for row in rows
         ]
