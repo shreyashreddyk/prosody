@@ -6,13 +6,17 @@ from pathlib import Path
 from typing import Iterable
 
 from app.models import (
+    DegradationEventRecord,
     LatencyEventRecord,
     LocalSessionEventsResponse,
+    ReplayArtifactRecord,
+    ReplayArtifactStatusRecord,
     SessionEventRecord,
     SessionRecord,
+    SessionTimelineEventRecord,
     TranscriptEventRecord,
-    TurnLatencySummaryRecord,
     TurnRecord,
+    TurnTimingRecord,
 )
 
 
@@ -20,6 +24,15 @@ def iso_now() -> str:
     from datetime import UTC, datetime
 
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def normalize_latency_stage(stage: str) -> str:
+    return {
+        "first_transcript_partial": "first_asr_partial",
+        "final_transcript": "final_asr",
+        "first_assistant_text": "llm_first_token",
+        "first_assistant_audio_playback": "playback_start",
+    }.get(stage, stage)
 
 
 class LocalSessionStore:
@@ -42,9 +55,11 @@ class LocalSessionStore:
         session_dir.mkdir(parents=True, exist_ok=True)
         self._write_json(session_dir / "session.json", record.model_dump())
         self._write_json(session_dir / "turns.json", [])
+        self._write_json(session_dir / "turn-timings.json", [])
         (session_dir / "transcript-events.jsonl").touch(exist_ok=True)
         (session_dir / "latency-events.jsonl").touch(exist_ok=True)
         (session_dir / "session-events.jsonl").touch(exist_ok=True)
+        (session_dir / "timeline-events.jsonl").touch(exist_ok=True)
         return record
 
     def session_dir(self, conversation_id: str, session_id: str) -> Path:
@@ -65,18 +80,74 @@ class LocalSessionStore:
             self.session_dir(event.conversationId, event.sessionId) / "session-events.jsonl",
             event.model_dump(),
         )
+        self.append_timeline_event(
+            SessionTimelineEventRecord(
+                id=event.id,
+                conversationId=event.conversationId,
+                sessionId=event.sessionId,
+                kind="session",
+                createdAt=event.createdAt,
+                sequence=self.next_timeline_sequence(event.conversationId, event.sessionId),
+                details={"type": event.type, **(event.details or {})},
+            )
+        )
 
     def append_transcript_event(self, event: TranscriptEventRecord) -> None:
         self._append_jsonl(
             self.session_dir(event.conversationId, event.sessionId) / "transcript-events.jsonl",
             event.model_dump(),
         )
+        self.append_timeline_event(
+            SessionTimelineEventRecord(
+                id=event.id,
+                conversationId=event.conversationId,
+                sessionId=event.sessionId,
+                turnId=event.turnId,
+                kind="transcript",
+                createdAt=event.createdAt,
+                sequence=self.next_timeline_sequence(event.conversationId, event.sessionId),
+                details={"role": event.role, "kind": event.kind, "text": event.text},
+            )
+        )
 
     def append_latency_event(self, event: LatencyEventRecord) -> None:
+        payload = event.model_copy(update={"stage": normalize_latency_stage(event.stage)})
         self._append_jsonl(
-            self.session_dir(event.conversationId, event.sessionId) / "latency-events.jsonl",
+            self.session_dir(payload.conversationId, payload.sessionId) / "latency-events.jsonl",
+            payload.model_dump(),
+        )
+        self.append_timeline_event(
+            SessionTimelineEventRecord(
+                id=payload.id,
+                conversationId=payload.conversationId,
+                sessionId=payload.sessionId,
+                turnId=payload.turnId,
+                kind="latency",
+                stage=payload.stage,
+                createdAt=payload.startedAt,
+                sequence=self.next_timeline_sequence(payload.conversationId, payload.sessionId),
+                details={"durationMs": payload.durationMs},
+            )
+        )
+
+    def append_timeline_event(self, event: SessionTimelineEventRecord) -> None:
+        self._append_jsonl(
+            self.session_dir(event.conversationId, event.sessionId) / "timeline-events.jsonl",
             event.model_dump(),
         )
+
+    def load_timeline_events(self, conversation_id: str, session_id: str) -> list[SessionTimelineEventRecord]:
+        return self._read_jsonl(
+            self.session_dir(conversation_id, session_id) / "timeline-events.jsonl",
+            SessionTimelineEventRecord,
+        )
+
+    def next_timeline_sequence(self, conversation_id: str, session_id: str) -> int:
+        path = self.session_dir(conversation_id, session_id) / "timeline-events.jsonl"
+        if not path.exists():
+            return 1
+        with path.open("r", encoding="utf-8") as handle:
+            return sum(1 for line in handle if line.strip()) + 1
 
     def save_turns(self, conversation_id: str, session_id: str, turns: Iterable[TurnRecord]) -> None:
         self._write_json(
@@ -87,6 +158,57 @@ class LocalSessionStore:
     def load_turns(self, conversation_id: str, session_id: str) -> list[TurnRecord]:
         payload = self._read_json(self.session_dir(conversation_id, session_id) / "turns.json")
         return [TurnRecord.model_validate(item) for item in payload]
+
+    def save_turn_timings(
+        self,
+        conversation_id: str,
+        session_id: str,
+        turn_timings: Iterable[TurnTimingRecord],
+    ) -> None:
+        self._write_json(
+            self.session_dir(conversation_id, session_id) / "turn-timings.json",
+            [turn.model_dump() for turn in turn_timings],
+        )
+
+    def load_turn_timings(self, conversation_id: str, session_id: str) -> list[TurnTimingRecord]:
+        path = self.session_dir(conversation_id, session_id) / "turn-timings.json"
+        if not path.exists():
+            return []
+        payload = self._read_json(path)
+        return [TurnTimingRecord.model_validate(item) for item in payload]
+
+    def save_replay_artifact(
+        self,
+        conversation_id: str,
+        session_id: str,
+        artifact: ReplayArtifactRecord,
+    ) -> None:
+        self._write_json(
+            self.session_dir(conversation_id, session_id) / "replay-artifact.json",
+            artifact.model_dump(),
+        )
+
+    def load_replay_artifact(self, conversation_id: str, session_id: str) -> ReplayArtifactRecord | None:
+        path = self.session_dir(conversation_id, session_id) / "replay-artifact.json"
+        if not path.exists():
+            return None
+        return ReplayArtifactRecord.model_validate(self._read_json(path))
+
+    def replay_artifact_status(self, conversation_id: str, session_id: str) -> ReplayArtifactStatusRecord:
+        artifact = self.load_replay_artifact(conversation_id, session_id)
+        if artifact is None:
+            return ReplayArtifactStatusRecord(available=False)
+        return ReplayArtifactStatusRecord(
+            available=True,
+            generatedAt=artifact.generatedAt,
+            path=str(self.session_dir(conversation_id, session_id) / "replay-artifact.json"),
+        )
+
+    def load_degradation_events(self, conversation_id: str, session_id: str) -> list[DegradationEventRecord]:
+        path = self.session_dir(conversation_id, session_id) / "degradation-events.jsonl"
+        if not path.exists():
+            return []
+        return self._read_jsonl(path, DegradationEventRecord)
 
     def load_events(self, conversation_id: str, session_id: str) -> LocalSessionEventsResponse:
         session = self.load_session(conversation_id, session_id)
@@ -120,13 +242,11 @@ class LocalSessionStore:
         role: str,
         text: str,
         created_at: str,
-        latency_summary: TurnLatencySummaryRecord | None = None,
     ) -> None:
         turns = self.load_turns(conversation_id, session_id)
         existing = next((turn for turn in turns if turn.id == turn_id), None)
         if existing:
             existing.transcriptText = text
-            existing.latencySummary = latency_summary
         else:
             turns.append(
                 TurnRecord(
@@ -136,7 +256,6 @@ class LocalSessionStore:
                     role=role,
                     transcriptText=text,
                     createdAt=created_at,
-                    latencySummary=latency_summary,
                 )
             )
         self.save_turns(conversation_id, session_id, turns)

@@ -3,15 +3,15 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from app.models import LatencyEventRecord, TurnLatencySummaryRecord
-from app.storage.local_store import LocalSessionStore
+from app.models import LatencyEventRecord
+from app.storage.local_store import LocalSessionStore, normalize_latency_stage
 
 
-def _iso_now() -> str:
+def iso_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _parse_iso(value: str) -> datetime:
+def parse_iso(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
@@ -21,46 +21,52 @@ class LatencyRecorder:
         self._conversation_id = conversation_id
         self._session_id = session_id
         self._session_start_at: str | None = None
-        self._by_stage: dict[str, LatencyEventRecord] = {}
+        self._turn_started_at: dict[str, str] = {}
+        self._by_key: dict[tuple[str | None, str], LatencyEventRecord] = {}
 
     def seed_session_start(self, started_at: str) -> None:
         self._session_start_at = started_at
 
-    def record_once(self, stage: str, *, turn_id: str | None = None) -> LatencyEventRecord:
-        existing = self._by_stage.get(stage)
+    def record_stage(
+        self,
+        stage: str,
+        *,
+        turn_id: str | None = None,
+        occurred_at: str | None = None,
+    ) -> LatencyEventRecord:
+        normalized_stage = normalize_latency_stage(stage)
+        key = (turn_id, normalized_stage)
+        existing = self._by_key.get(key)
         if existing:
             return existing
 
-        started_at = _iso_now()
-        if stage == "session_start":
+        started_at = occurred_at or iso_now()
+        if normalized_stage == "session_start":
             self._session_start_at = started_at
 
-        duration_ms = None
-        if self._session_start_at and stage != "session_start":
-            duration_ms = (_parse_iso(started_at) - _parse_iso(self._session_start_at)).total_seconds() * 1000
+        if turn_id and turn_id not in self._turn_started_at:
+            self._turn_started_at[turn_id] = started_at
 
+        duration_ms = self._build_duration_ms(normalized_stage, turn_id, started_at)
         event = LatencyEventRecord(
             id=f"lat_{uuid.uuid4().hex[:12]}",
             conversationId=self._conversation_id,
             sessionId=self._session_id,
             turnId=turn_id,
-            stage=stage,
+            stage=normalized_stage,
             startedAt=started_at,
             completedAt=started_at,
             durationMs=duration_ms,
         )
-        self._by_stage[stage] = event
+        self._by_key[key] = event
         self._store.append_latency_event(event)
         return event
 
-    def build_turn_summary(self) -> TurnLatencySummaryRecord:
-        return TurnLatencySummaryRecord(
-            firstTranscriptPartialMs=self._duration("first_transcript_partial"),
-            finalTranscriptMs=self._duration("final_transcript"),
-            firstAssistantTextMs=self._duration("first_assistant_text"),
-            firstAssistantAudioPlaybackMs=self._duration("first_assistant_audio_playback"),
-        )
+    def _build_duration_ms(self, stage: str, turn_id: str | None, started_at: str) -> float | None:
+        if stage == "session_start":
+            return 0
 
-    def _duration(self, stage: str) -> float | None:
-        event = self._by_stage.get(stage)
-        return event.durationMs if event else None
+        reference = self._turn_started_at.get(turn_id) if turn_id else self._session_start_at
+        if reference is None:
+            return None
+        return (parse_iso(started_at) - parse_iso(reference)).total_seconds() * 1000

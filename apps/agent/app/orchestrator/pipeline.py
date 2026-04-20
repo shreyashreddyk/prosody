@@ -43,16 +43,17 @@ class SessionObserver(BaseObserver):
         self._latency = latency
         self._conversation_id = conversation_id
         self._session_id = session_id
-        self._active_user_turn_id: str | None = None
-        self._active_assistant_turn_id: str | None = None
+        self._active_turn_id: str | None = None
         self._assistant_text_parts: list[str] = []
+        self._assistant_transcript_persisted = False
 
     async def on_push_frame(self, data: FramePushed):
         frame = data.frame
 
         if isinstance(frame, InterimTranscriptionFrame):
-            turn_id = self._ensure_user_turn()
-            self._latency.record_once("first_transcript_partial", turn_id=turn_id)
+            turn_id = self._ensure_turn()
+            created_at = getattr(frame, "timestamp", None) or iso_now()
+            self._latency.record_stage("first_asr_partial", turn_id=turn_id, occurred_at=created_at)
             self._store.append_transcript_event(
                 TranscriptEventRecord(
                     id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -62,18 +63,20 @@ class SessionObserver(BaseObserver):
                     role="user",
                     kind="partial",
                     text=frame.text,
-                    createdAt=frame.timestamp,
+                    createdAt=created_at,
                 )
             )
             return
 
         if isinstance(frame, InputAudioRawFrame):
-            self._latency.record_once("first_user_audio", turn_id=self._ensure_user_turn())
+            turn_id = self._ensure_turn()
+            self._latency.record_stage("first_user_audio", turn_id=turn_id)
             return
 
         if isinstance(frame, TranscriptionFrame):
-            turn_id = self._ensure_user_turn()
-            self._latency.record_once("final_transcript", turn_id=turn_id)
+            turn_id = self._ensure_turn()
+            created_at = getattr(frame, "timestamp", None) or iso_now()
+            self._latency.record_stage("final_asr", turn_id=turn_id, occurred_at=created_at)
             self._store.append_transcript_event(
                 TranscriptEventRecord(
                     id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -83,79 +86,45 @@ class SessionObserver(BaseObserver):
                     role="user",
                     kind="final",
                     text=frame.text,
-                    createdAt=frame.timestamp,
+                    createdAt=created_at,
                 )
             )
             self._store.upsert_turn_from_transcript(
                 conversation_id=self._conversation_id,
                 session_id=self._session_id,
-                turn_id=turn_id,
+                turn_id=f"{turn_id}:user",
                 role="user",
                 text=frame.text,
-                created_at=frame.timestamp,
-                latency_summary=self._latency.build_turn_summary(),
+                created_at=created_at,
             )
-            self._active_assistant_turn_id = f"turn_{uuid.uuid4().hex[:12]}"
             self._assistant_text_parts = []
-            self._active_user_turn_id = None
+            self._assistant_transcript_persisted = False
             return
 
         if isinstance(frame, LLMFullResponseStartFrame):
-            self._latency.record_once("llm_request_start")
+            turn_id = self._ensure_turn()
+            self._latency.record_stage("llm_request_start", turn_id=turn_id)
             return
 
         if isinstance(frame, LLMTextFrame):
-            if self._active_assistant_turn_id is None:
-                self._active_assistant_turn_id = f"turn_{uuid.uuid4().hex[:12]}"
+            turn_id = self._ensure_turn()
             self._assistant_text_parts.append(frame.text)
-            self._latency.record_once(
-                "first_assistant_text",
-                turn_id=self._active_assistant_turn_id,
-            )
+            self._latency.record_stage("llm_first_token", turn_id=turn_id)
             return
 
         if isinstance(frame, TTSStartedFrame):
-            self._latency.record_once(
-                "tts_request_start",
-                turn_id=self._active_assistant_turn_id,
-            )
+            turn_id = self._ensure_turn()
+            self._latency.record_stage("tts_request_start", turn_id=turn_id)
             return
 
         if isinstance(frame, TTSAudioRawFrame):
-            self._latency.record_once(
-                "first_assistant_audio_playback",
-                turn_id=self._active_assistant_turn_id,
-            )
+            turn_id = self._ensure_turn()
+            self._latency.record_stage("tts_first_byte", turn_id=turn_id)
+            self._latency.record_stage("playback_start", turn_id=turn_id)
             return
 
         if isinstance(frame, LLMFullResponseEndFrame):
-            if self._active_assistant_turn_id and self._assistant_text_parts:
-                text = "".join(self._assistant_text_parts).strip()
-                if text:
-                    created_at = iso_now()
-                    self._store.append_transcript_event(
-                        TranscriptEventRecord(
-                            id=f"evt_{uuid.uuid4().hex[:12]}",
-                            conversationId=self._conversation_id,
-                            sessionId=self._session_id,
-                            turnId=self._active_assistant_turn_id,
-                            role="assistant",
-                            kind="final",
-                            text=text,
-                            createdAt=created_at,
-                        )
-                    )
-                    self._store.upsert_turn_from_transcript(
-                        conversation_id=self._conversation_id,
-                        session_id=self._session_id,
-                        turn_id=self._active_assistant_turn_id,
-                        role="assistant",
-                        text=text,
-                        created_at=created_at,
-                        latency_summary=self._latency.build_turn_summary(),
-                    )
-            self._active_assistant_turn_id = None
-            self._assistant_text_parts = []
+            self.flush_active_turn(status="complete")
             return
 
         if isinstance(frame, ErrorFrame):
@@ -170,10 +139,54 @@ class SessionObserver(BaseObserver):
                 )
             )
 
-    def _ensure_user_turn(self) -> str:
-        if self._active_user_turn_id is None:
-            self._active_user_turn_id = f"turn_{uuid.uuid4().hex[:12]}"
-        return self._active_user_turn_id
+    def flush_active_turn(self, *, status: str) -> None:
+        if self._active_turn_id is None:
+            return
+
+        created_at = iso_now()
+        self._persist_assistant_transcript(status=status, created_at=created_at)
+        self._latency.record_stage("turn_completed", turn_id=self._active_turn_id, occurred_at=created_at)
+        self._active_turn_id = None
+        self._assistant_text_parts = []
+        self._assistant_transcript_persisted = False
+
+    def _persist_assistant_transcript(self, *, status: str, created_at: str) -> None:
+        if self._assistant_transcript_persisted or self._active_turn_id is None:
+            return
+
+        text = "".join(self._assistant_text_parts).strip()
+        if not text:
+            return
+
+        kind = "final" if status == "complete" else "partial"
+        self._store.append_transcript_event(
+            TranscriptEventRecord(
+                id=f"evt_{uuid.uuid4().hex[:12]}",
+                conversationId=self._conversation_id,
+                sessionId=self._session_id,
+                turnId=self._active_turn_id,
+                role="assistant",
+                kind=kind,
+                text=text,
+                createdAt=created_at,
+            )
+        )
+        self._store.upsert_turn_from_transcript(
+            conversation_id=self._conversation_id,
+            session_id=self._session_id,
+            turn_id=f"{self._active_turn_id}:assistant",
+            role="assistant",
+            text=text,
+            created_at=created_at,
+        )
+        self._assistant_transcript_persisted = True
+
+    def _ensure_turn(self) -> str:
+        if self._active_turn_id is None:
+            self._active_turn_id = f"turn_{uuid.uuid4().hex[:12]}"
+            self._assistant_text_parts = []
+            self._assistant_transcript_persisted = False
+        return self._active_turn_id
 
 
 def build_session_task(
@@ -245,4 +258,4 @@ def build_session_task(
     )
 
     runner = PipelineRunner(handle_sigint=False, handle_sigterm=False)
-    return transport, task, runner
+    return transport, task, runner, observer

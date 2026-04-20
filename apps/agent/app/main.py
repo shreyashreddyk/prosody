@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Prosody Agent",
     version="0.1.0",
-    description="Local realtime FastAPI orchestrator for the Prosody v1 voice loop.",
+    description="Local realtime FastAPI orchestrator for the Prosody v2 observable voice loop.",
     lifespan=lifespan,
 )
 app.include_router(api_router)

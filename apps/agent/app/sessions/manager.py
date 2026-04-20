@@ -20,12 +20,14 @@ from app.models import (
     LocalSessionEventsResponse,
     SessionEventRecord,
     SessionRecord,
+    SessionTimelineResponse,
     SmallWebRTCOfferRequest,
     SmallWebRTCOfferResponse,
     SmallWebRTCPatchRequestModel,
 )
 from app.orchestrator.pipeline import build_session_task
 from app.providers.factory import ProviderFactory
+from app.replay.service import build_session_timeline, generate_replay_artifact
 from app.storage.local_store import LocalSessionStore, iso_now
 
 
@@ -36,6 +38,7 @@ class RealtimeSession:
     task: Any = None
     runner: Any = None
     runner_task: asyncio.Task | None = None
+    observer: Any = None
 
 
 class SessionManager:
@@ -85,7 +88,7 @@ class SessionManager:
         payload = SmallWebRTCRequest.from_dict(request.model_dump(exclude_none=True))
 
         async def create_pipeline(webrtc_connection) -> None:
-            transport, task, runner = build_session_task(
+            transport, task, runner, observer = build_session_task(
                 settings=self._settings,
                 providers=self._providers.build(),
                 store=self._store,
@@ -96,16 +99,23 @@ class SessionManager:
             )
             realtime.task = task
             realtime.runner = runner
+            realtime.observer = observer
 
             @task.event_handler("on_pipeline_finished")
             async def on_pipeline_finished(_task, _frame):
+                if realtime.observer:
+                    realtime.observer.flush_active_turn(status="partial")
                 realtime.session.status = "ended"
                 realtime.session.endedAt = iso_now()
                 self._store.save_session(realtime.session)
+                self._finalize_artifacts(realtime.session)
 
             @task.event_handler("on_pipeline_error")
             async def on_pipeline_error(_task, frame):
+                if realtime.observer:
+                    realtime.observer.flush_active_turn(status="failed")
                 realtime.session.status = "failed"
+                realtime.session.endedAt = iso_now()
                 self._store.save_session(realtime.session)
                 self._store.append_session_event(
                     SessionEventRecord(
@@ -117,6 +127,7 @@ class SessionManager:
                         details={"message": getattr(frame, "error", "unknown pipeline error")},
                     )
                 )
+                self._finalize_artifacts(realtime.session)
 
             realtime.runner_task = asyncio.create_task(runner.run(task))
 
@@ -139,6 +150,8 @@ class SessionManager:
 
     async def end_session(self, session_id: str) -> SessionRecord:
         realtime = self._require_session(session_id)
+        if realtime.observer:
+            realtime.observer.flush_active_turn(status="partial")
         if realtime.task:
             await realtime.task.queue_frame(EndFrame())
         if realtime.runner_task:
@@ -159,11 +172,16 @@ class SessionManager:
                 createdAt=realtime.session.endedAt,
             )
         )
+        self._finalize_artifacts(realtime.session)
         return realtime.session
 
     def get_events(self, session_id: str) -> LocalSessionEventsResponse:
         realtime = self._require_session(session_id)
         return self._store.load_events(realtime.session.conversationId, realtime.session.id)
+
+    def get_timeline(self, session_id: str) -> SessionTimelineResponse:
+        realtime = self._require_session(session_id)
+        return build_session_timeline(self._store, realtime.session.conversationId, realtime.session.id)
 
     async def close(self) -> None:
         for session_id in list(self._sessions.keys()):
@@ -192,3 +210,18 @@ class SessionManager:
         if not realtime:
             raise KeyError(f"Unknown session: {session_id}")
         return realtime
+
+    def _finalize_artifacts(self, session: SessionRecord) -> None:
+        try:
+            generate_replay_artifact(self._store, session.conversationId, session.id)
+        except Exception as exc:
+            self._store.append_session_event(
+                SessionEventRecord(
+                    id=f"evt_{uuid.uuid4().hex[:12]}",
+                    conversationId=session.conversationId,
+                    sessionId=session.id,
+                    type="transport_failed",
+                    createdAt=iso_now(),
+                    details={"message": f"Replay artifact generation failed: {exc}"},
+                )
+            )

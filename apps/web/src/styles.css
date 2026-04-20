@@ -102,6 +102,11 @@ button {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.compact-list li {
+  gap: 6px;
+  padding: 10px 12px;
+}
+
 .transcript-card {
   padding: 16px;
   border-radius: 16px;
@@ -145,6 +150,25 @@ button {
 .error-copy {
   color: #ff9c9c;
   line-height: 1.5;
+}
+
+.metrics-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.metric-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(126, 180, 255, 0.12);
+  border: 1px solid rgba(126, 180, 255, 0.16);
+  color: #dfeaf8;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.78rem;
 }
 
 @media (max-width: 1080px) {

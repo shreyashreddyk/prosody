@@ -10,6 +10,7 @@ from app.models import (
     MetaResponse,
     ProviderConfigState,
     SessionRecord,
+    SessionTimelineResponse,
     SmallWebRTCOfferRequest,
     SmallWebRTCOfferResponse,
     SmallWebRTCPatchRequestModel,
@@ -29,7 +30,7 @@ def meta() -> MetaResponse:
     return MetaResponse(
         service="prosody-agent",
         version="0.1.0",
-        realtime_status="local_v1_ready",
+        realtime_status="local_v2_observable",
         intended_local_transport="SmallWebRTCTransport",
         intended_deployed_transport="DailyTransport",
         provider_config=ProviderConfigState(
@@ -102,5 +103,13 @@ async def end_local_session(session_id: str, request: Request) -> SessionRecord:
 def get_local_session_events(session_id: str, request: Request) -> LocalSessionEventsResponse:
     try:
         return _manager(request).get_events(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/api/local/sessions/{session_id}/timeline", response_model=SessionTimelineResponse)
+def get_local_session_timeline(session_id: str, request: Request) -> SessionTimelineResponse:
+    try:
+        return _manager(request).get_timeline(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

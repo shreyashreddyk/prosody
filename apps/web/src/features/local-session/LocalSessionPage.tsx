@@ -3,9 +3,13 @@ import { PipecatClient, type RTVIMessage, type TransportState } from "@pipecat-a
 import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
 import type {
   LatencyEvent,
+  ReplayArtifactStatus,
   RealtimeConnectionState,
+  RollingLatencyMetrics,
   Session,
-  TranscriptEvent
+  SessionTimelineResponse,
+  TranscriptEvent,
+  TurnTimingRecord
 } from "@prosody/contracts";
 import { Panel, SectionTitle, StatusBadge } from "@prosody/ui";
 
@@ -26,9 +30,28 @@ type TranscriptRow = {
   role: "user" | "assistant";
   text: string;
   final: boolean;
+  createdAt: string;
 };
 
 const SESSION_STORAGE_KEY = "prosody.local.sessionId";
+
+const STAGE_ROWS: Array<{ label: string; value: (turn: TurnTimingRecord) => number | undefined }> = [
+  { label: "First ASR partial", value: (turn) => turn.durations.firstAsrPartialMs },
+  { label: "Final ASR", value: (turn) => turn.durations.finalAsrMs },
+  { label: "LLM first token", value: (turn) => turn.durations.llmFirstTokenMs },
+  { label: "TTS first byte", value: (turn) => turn.durations.ttsFirstByteMs },
+  { label: "Playback start", value: (turn) => turn.durations.playbackStartMs },
+  { label: "Turn completed", value: (turn) => turn.durations.turnCompletedMs }
+];
+
+const ROLLING_ROWS: Array<{ label: string; metric: keyof RollingLatencyMetrics }> = [
+  { label: "First ASR partial", metric: "firstAsrPartial" },
+  { label: "Final ASR", metric: "finalAsr" },
+  { label: "LLM first token", metric: "llmFirstToken" },
+  { label: "TTS first byte", metric: "ttsFirstByte" },
+  { label: "Playback start", metric: "playbackStart" },
+  { label: "Turn completed", metric: "turnCompleted" }
+];
 
 function getAgentBaseUrl() {
   return import.meta.env.VITE_AGENT_BASE_URL ?? "http://127.0.0.1:8000";
@@ -54,15 +77,26 @@ function mergeTranscriptEvents(events: TranscriptEvent[]): TranscriptRow[] {
   const rows = new Map<string, TranscriptRow>();
 
   for (const event of events) {
-    rows.set(event.turnId, {
-      id: event.turnId,
+    const key = `${event.turnId}:${event.role}`;
+    rows.set(key, {
+      id: key,
       role: event.role,
       text: event.text,
-      final: event.kind === "final"
+      final: event.kind === "final",
+      createdAt: event.createdAt
     });
   }
 
-  return Array.from(rows.values());
+  return Array.from(rows.values()).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function formatMs(value?: number) {
+  return value == null ? "--" : `${Math.round(value)} ms`;
+}
+
+function latestTurn(turns: TurnTimingRecord[]) {
+  const ordered = [...turns].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
+  return ordered.length === 0 ? null : ordered[ordered.length - 1];
 }
 
 export function LocalSessionPage() {
@@ -71,6 +105,11 @@ export function LocalSessionPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [transcriptRows, setTranscriptRows] = useState<TranscriptRow[]>([]);
   const [latencyEvents, setLatencyEvents] = useState<LatencyEvent[]>([]);
+  const [turnTimings, setTurnTimings] = useState<TurnTimingRecord[]>([]);
+  const [rollingMetrics, setRollingMetrics] = useState<RollingLatencyMetrics | null>(null);
+  const [degradationCount, setDegradationCount] = useState(0);
+  const [replayStatus, setReplayStatus] = useState<ReplayArtifactStatus>({ available: false });
+  const [timelineError, setTimelineError] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [agentHealth, setAgentHealth] = useState<"checking" | "ready" | "offline">("checking");
 
@@ -78,7 +117,7 @@ export function LocalSessionPage() {
     setTranscriptRows((current) => {
       const next = new Map(current.map((item) => [item.id, item]));
       next.set(row.id, row);
-      return Array.from(next.values());
+      return Array.from(next.values()).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
     });
   };
 
@@ -91,6 +130,19 @@ export function LocalSessionPage() {
     setSession(payload.session);
     setTranscriptRows(mergeTranscriptEvents(payload.transcriptEvents));
     setLatencyEvents(payload.latencyEvents);
+  };
+
+  const fetchTimeline = async (sessionId: string) => {
+    const response = await fetch(`${getAgentBaseUrl()}/api/local/sessions/${sessionId}/timeline`);
+    if (!response.ok) {
+      throw new Error("Unable to load session timeline");
+    }
+    const payload = (await response.json()) as SessionTimelineResponse;
+    setTurnTimings(payload.turnTimings);
+    setRollingMetrics(payload.rollingMetrics);
+    setDegradationCount(payload.degradationEvents.length);
+    setReplayStatus(payload.replayArtifactStatus);
+    setTimelineError(null);
   };
 
   useEffect(() => {
@@ -127,6 +179,9 @@ export function LocalSessionPage() {
     void fetchEvents(existingSessionId).catch(() => {
       localStorage.removeItem(SESSION_STORAGE_KEY);
     });
+    void fetchTimeline(existingSessionId).catch((error: unknown) => {
+      setTimelineError(error instanceof Error ? error.message : "Unable to load metrics");
+    });
   }, []);
 
   useEffect(() => {
@@ -136,6 +191,9 @@ export function LocalSessionPage() {
 
     const intervalId = window.setInterval(() => {
       void fetchEvents(session.id).catch(() => undefined);
+      void fetchTimeline(session.id).catch((error: unknown) => {
+        setTimelineError(error instanceof Error ? error.message : "Unable to load metrics");
+      });
     }, 1000);
 
     return () => {
@@ -153,6 +211,7 @@ export function LocalSessionPage() {
 
   const handleStart = async () => {
     setErrorMessage(null);
+    setTimelineError(null);
     setConnectionState("connecting");
 
     try {
@@ -170,6 +229,10 @@ export function LocalSessionPage() {
       setSession(payload.session);
       setTranscriptRows([]);
       setLatencyEvents([]);
+      setTurnTimings([]);
+      setRollingMetrics(null);
+      setDegradationCount(0);
+      setReplayStatus({ available: false });
       localStorage.setItem(SESSION_STORAGE_KEY, payload.session.id);
       const url = new URL(window.location.href);
       url.searchParams.set("sessionId", payload.session.id);
@@ -188,10 +251,11 @@ export function LocalSessionPage() {
           },
           onUserTranscript: (data) => {
             upsertRow({
-              id: `user-${data.timestamp}`,
+              id: `live:user:${data.timestamp}`,
               role: "user",
               text: data.text,
-              final: data.final
+              final: data.final,
+              createdAt: data.timestamp
             });
           },
           onBotLlmStarted: () => {
@@ -199,7 +263,8 @@ export function LocalSessionPage() {
               id: "assistant-live",
               role: "assistant",
               text: "",
-              final: false
+              final: false,
+              createdAt: new Date().toISOString()
             });
           },
           onBotLlmText: (data) => {
@@ -230,6 +295,7 @@ export function LocalSessionPage() {
         }
       });
       await fetchEvents(payload.session.id);
+      await fetchTimeline(payload.session.id);
     } catch (error) {
       setConnectionState("failed");
       setErrorMessage(error instanceof Error ? error.message : "Unable to start the local session");
@@ -251,6 +317,7 @@ export function LocalSessionPage() {
           method: "POST"
         });
         await fetchEvents(activeSessionId);
+        await fetchTimeline(activeSessionId);
       }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Unable to end the local session");
@@ -259,14 +326,16 @@ export function LocalSessionPage() {
     }
   };
 
+  const latest = latestTurn(turnTimings);
+
   return (
     <div className="app-shell">
       <header className="hero">
-        <p className="eyebrow">Prosody v1</p>
-        <h1>Local Realtime Voice Loop</h1>
+        <p className="eyebrow">Prosody v2</p>
+        <h1>Observable Realtime Voice Loop</h1>
         <p className="hero-copy">
-          Local-only Pipecat voice session with SmallWebRTC transport, live transcripts, and persisted latency
-          events.
+          Local-only Pipecat voice session with normalized timing events, replayable session artifacts, and a live
+          metrics panel.
         </p>
       </header>
 
@@ -278,6 +347,9 @@ export function LocalSessionPage() {
           <StatusBadge tone={connectionState === "failed" ? "danger" : connectionState === "live" ? "success" : "warning"}>
             Session {connectionState}
           </StatusBadge>
+          <StatusBadge tone={replayStatus.available ? "success" : "warning"}>
+            Replay {replayStatus.available ? "ready" : "pending"}
+          </StatusBadge>
         </div>
 
         <div className="local-layout">
@@ -285,6 +357,7 @@ export function LocalSessionPage() {
             <SectionTitle>Session</SectionTitle>
             <p className="muted">Local transport: `SmallWebRTCTransport`</p>
             <p className="muted">Current session: {session?.id ?? "none"}</p>
+            <p className="muted">Replay artifact: {replayStatus.path ?? "not generated yet"}</p>
             <div className="control-row">
               <button className="primary-button" type="button" onClick={handleStart} disabled={connectionState === "connecting" || connectionState === "live"}>
                 Start session
@@ -311,11 +384,8 @@ export function LocalSessionPage() {
                 ))
               )}
             </div>
-          </Panel>
-
-          <Panel title="Latency">
-            <SectionTitle>Captured milestones</SectionTitle>
-            <ul className="list">
+            <SectionTitle>Raw milestones</SectionTitle>
+            <ul className="list compact-list">
               {latencyEvents.length === 0 ? (
                 <li>
                   <span>No latency events recorded yet.</span>
@@ -324,11 +394,58 @@ export function LocalSessionPage() {
                 latencyEvents.map((event) => (
                   <li key={event.id}>
                     <strong>{event.stage}</strong>
-                    <span>{event.durationMs ? `${Math.round(event.durationMs)} ms` : event.startedAt}</span>
+                    <span>{event.durationMs == null ? event.startedAt : `${Math.round(event.durationMs)} ms`}</span>
                   </li>
                 ))
               )}
             </ul>
+          </Panel>
+
+          <Panel title="Metrics">
+            <SectionTitle>Latest turn breakdown</SectionTitle>
+            {timelineError ? <p className="error-copy">{timelineError}</p> : null}
+            {!latest ? (
+              <p className="muted">No completed or partial turn timings yet.</p>
+            ) : (
+              <div className="metrics-stack">
+                <div className="metric-banner">
+                  <span>Turn {latest.turnId}</span>
+                  <span>{latest.status}</span>
+                </div>
+                <ul className="list compact-list">
+                  {STAGE_ROWS.map((row) => (
+                    <li key={row.label}>
+                      <strong>{row.label}</strong>
+                      <span>{formatMs(row.value(latest))}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="muted">Missing stages: {latest.missingStages.length === 0 ? "none" : latest.missingStages.join(", ")}</p>
+              </div>
+            )}
+
+            <SectionTitle>Rolling p50 / p95</SectionTitle>
+            {rollingMetrics == null ? (
+              <p className="muted">Rolling metrics will populate after timeline data arrives.</p>
+            ) : (
+              <ul className="list compact-list">
+                {ROLLING_ROWS.map(({ label, metric }) => (
+                  <li key={metric}>
+                    <strong>{label}</strong>
+                    <span>
+                      p50 {formatMs(rollingMetrics[metric].p50Ms)} / p95 {formatMs(rollingMetrics[metric].p95Ms)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <SectionTitle>Degraded markers</SectionTitle>
+            <p className="muted">
+              {degradationCount === 0
+                ? "No degraded events recorded yet. Placeholder is ready for future fallback markers."
+                : `${degradationCount} degraded events recorded.`}
+            </p>
           </Panel>
         </div>
       </main>

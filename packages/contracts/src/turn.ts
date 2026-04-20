@@ -1,8 +1,32 @@
 export interface TurnLatencySummary {
-  firstTranscriptPartialMs?: number;
-  finalTranscriptMs?: number;
-  firstAssistantTextMs?: number;
-  firstAssistantAudioPlaybackMs?: number;
+  firstAsrPartialMs?: number;
+  finalAsrMs?: number;
+  llmFirstTokenMs?: number;
+  ttsFirstByteMs?: number;
+  playbackStartMs?: number;
+  turnCompletedMs?: number;
+}
+
+export type TurnTimingStatus = "complete" | "partial" | "failed";
+
+export interface TurnTimingRecord {
+  turnId: string;
+  userTurnId?: string;
+  assistantTurnId?: string;
+  startedAt: string;
+  completedAt?: string;
+  status: TurnTimingStatus;
+  firstUserAudioAt?: string;
+  firstAsrPartialAt?: string;
+  finalAsrAt?: string;
+  llmRequestStartAt?: string;
+  llmFirstTokenAt?: string;
+  ttsRequestStartAt?: string;
+  ttsFirstByteAt?: string;
+  playbackStartAt?: string;
+  turnCompletedAt?: string;
+  missingStages: import("./events").LatencyStage[];
+  durations: TurnLatencySummary;
 }
 
 export type TurnRole = "user" | "assistant" | "system";
