@@ -1,9 +1,8 @@
 export interface TurnLatencySummary {
-  firstAsrPartialMs?: number;
-  finalAsrMs?: number;
-  llmFirstTokenMs?: number;
-  ttsFirstByteMs?: number;
-  playbackStartMs?: number;
+  firstTranscriptPartialMs?: number;
+  finalTranscriptMs?: number;
+  firstAssistantTextMs?: number;
+  firstAssistantAudioPlaybackMs?: number;
 }
 
 export type TurnRole = "user" | "assistant" | "system";

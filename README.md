@@ -2,7 +2,7 @@
 
 Prosody is a production-style real-time multimodal interview and presentation coach. This repository currently provides the initial monorepo scaffold, shared contracts, a placeholder web experience, and a minimal FastAPI agent service.
 
-The realtime pipeline is intentionally not implemented yet. This baseline is focused on a clean project shape, shared vocabulary, health checks, and local documentation that makes future iterations easier to reason about.
+The repo now includes a local-only v1 realtime voice loop built around Pipecat and `SmallWebRTCTransport`. This version is focused on a single-user local flow, explicit observability, and simple file-based persistence rather than auth, deployment, or product polish.
 
 ## Stack
 
@@ -29,8 +29,10 @@ The realtime pipeline is intentionally not implemented yet. This baseline is foc
 ## Current Baseline
 
 - Shared contracts for `Conversation`, `Session`, `Turn`, `Source`, `LatencyEvent`, `DegradationEvent`, and `FlashcardSet`
-- Placeholder web app with landing content, a three-pane authenticated shell preview, and backend status panel
-- FastAPI service with `GET /health/live`, `GET /health/ready`, and `GET /meta`
+- Shared realtime contracts for transcript, session, and latency events
+- Minimal local realtime web page with start/end controls, live transcript updates, and connection state
+- FastAPI service with health/meta routes plus local session, offer, ICE patch, end, and events APIs
+- File-based local persistence under `PROSODY_DATA_DIR`
 - Local documentation baseline covering architecture, contracts, evaluation, and failure cases
 
 ## Local Run
@@ -78,4 +80,4 @@ Keep Supabase anon and agent base URL in the web env. Keep OpenAI, Deepgram, Ele
 ## Notes
 
 - The docs under `docs/` are local-only and intentionally ignored by Git.
-- This scaffold does not yet include auth flows, persistence APIs, uploads, realtime transports, or provider integrations.
+- This version is local-only and does not yet include auth, Daily transport, Supabase persistence, uploads, summaries, flashcards, or replay controls.

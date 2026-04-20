@@ -56,7 +56,6 @@ button {
   line-height: 1.65;
 }
 
-.hero-actions,
 .control-row {
   display: flex;
   gap: 12px;
@@ -64,21 +63,20 @@ button {
 }
 
 .workspace-preview {
-  max-width: 1400px;
+  max-width: 1280px;
   margin: 0 auto;
 }
 
-.workspace-header {
+.status-row {
   display: flex;
-  justify-content: space-between;
   gap: 16px;
-  align-items: flex-start;
   margin-bottom: 20px;
+  flex-wrap: wrap;
 }
 
-.three-pane-layout {
+.local-layout {
   display: grid;
-  grid-template-columns: 1fr 1.3fr 1fr;
+  grid-template-columns: 320px minmax(0, 1.3fr) 320px;
   gap: 16px;
 }
 
@@ -109,7 +107,11 @@ button {
   border-radius: 16px;
   background: rgba(26, 35, 48, 0.72);
   border: 1px solid rgba(148, 184, 255, 0.15);
-  margin-bottom: 16px;
+}
+
+.transcript-list {
+  display: grid;
+  gap: 12px;
 }
 
 .speaker {
@@ -140,8 +142,13 @@ button {
   border-color: rgba(255, 255, 255, 0.14);
 }
 
+.error-copy {
+  color: #ff9c9c;
+  line-height: 1.5;
+}
+
 @media (max-width: 1080px) {
-  .three-pane-layout {
+  .local-layout {
     grid-template-columns: 1fr;
   }
 }
@@ -151,7 +158,12 @@ button {
     padding: 20px;
   }
 
-  .workspace-header {
-    flex-direction: column;
+  .control-row {
+    width: 100%;
+  }
+
+  .primary-button,
+  .secondary-button {
+    width: 100%;
   }
 }

@@ -13,6 +13,8 @@ dependencies = [
   "uvicorn>=0.32,<1.0",
   "pydantic>=2.9,<3.0",
   "httpx>=0.28,<1.0",
+  "openai>=2.0,<3.0",
+  "pipecat-ai[webrtc,deepgram,openai,elevenlabs]>=0.0.108,<0.1",
   "pytest>=8.3,<9.0"
 ]
 

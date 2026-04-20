@@ -1,0 +1,248 @@
+from __future__ import annotations
+
+import uuid
+
+from pipecat.frames.frames import (
+    ErrorFrame,
+    Frame,
+    InputAudioRawFrame,
+    InterimTranscriptionFrame,
+    LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
+    LLMTextFrame,
+    TTSAudioRawFrame,
+    TTSStartedFrame,
+    TranscriptionFrame,
+)
+from pipecat.observers.base_observer import BaseObserver, FramePushed
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+
+from app.config import Settings
+from app.metrics.latency import LatencyRecorder
+from app.models import SessionEventRecord, TranscriptEventRecord
+from app.providers.factory import ProviderBundle
+from app.storage.local_store import LocalSessionStore, iso_now
+from app.transports.local_webrtc import build_smallwebrtc_transport
+
+
+class SessionObserver(BaseObserver):
+    def __init__(
+        self,
+        *,
+        store: LocalSessionStore,
+        latency: LatencyRecorder,
+        conversation_id: str,
+        session_id: str,
+    ):
+        super().__init__()
+        self._store = store
+        self._latency = latency
+        self._conversation_id = conversation_id
+        self._session_id = session_id
+        self._active_user_turn_id: str | None = None
+        self._active_assistant_turn_id: str | None = None
+        self._assistant_text_parts: list[str] = []
+
+    async def on_push_frame(self, data: FramePushed):
+        frame = data.frame
+
+        if isinstance(frame, InterimTranscriptionFrame):
+            turn_id = self._ensure_user_turn()
+            self._latency.record_once("first_transcript_partial", turn_id=turn_id)
+            self._store.append_transcript_event(
+                TranscriptEventRecord(
+                    id=f"evt_{uuid.uuid4().hex[:12]}",
+                    conversationId=self._conversation_id,
+                    sessionId=self._session_id,
+                    turnId=turn_id,
+                    role="user",
+                    kind="partial",
+                    text=frame.text,
+                    createdAt=frame.timestamp,
+                )
+            )
+            return
+
+        if isinstance(frame, InputAudioRawFrame):
+            self._latency.record_once("first_user_audio", turn_id=self._ensure_user_turn())
+            return
+
+        if isinstance(frame, TranscriptionFrame):
+            turn_id = self._ensure_user_turn()
+            self._latency.record_once("final_transcript", turn_id=turn_id)
+            self._store.append_transcript_event(
+                TranscriptEventRecord(
+                    id=f"evt_{uuid.uuid4().hex[:12]}",
+                    conversationId=self._conversation_id,
+                    sessionId=self._session_id,
+                    turnId=turn_id,
+                    role="user",
+                    kind="final",
+                    text=frame.text,
+                    createdAt=frame.timestamp,
+                )
+            )
+            self._store.upsert_turn_from_transcript(
+                conversation_id=self._conversation_id,
+                session_id=self._session_id,
+                turn_id=turn_id,
+                role="user",
+                text=frame.text,
+                created_at=frame.timestamp,
+                latency_summary=self._latency.build_turn_summary(),
+            )
+            self._active_assistant_turn_id = f"turn_{uuid.uuid4().hex[:12]}"
+            self._assistant_text_parts = []
+            self._active_user_turn_id = None
+            return
+
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._latency.record_once("llm_request_start")
+            return
+
+        if isinstance(frame, LLMTextFrame):
+            if self._active_assistant_turn_id is None:
+                self._active_assistant_turn_id = f"turn_{uuid.uuid4().hex[:12]}"
+            self._assistant_text_parts.append(frame.text)
+            self._latency.record_once(
+                "first_assistant_text",
+                turn_id=self._active_assistant_turn_id,
+            )
+            return
+
+        if isinstance(frame, TTSStartedFrame):
+            self._latency.record_once(
+                "tts_request_start",
+                turn_id=self._active_assistant_turn_id,
+            )
+            return
+
+        if isinstance(frame, TTSAudioRawFrame):
+            self._latency.record_once(
+                "first_assistant_audio_playback",
+                turn_id=self._active_assistant_turn_id,
+            )
+            return
+
+        if isinstance(frame, LLMFullResponseEndFrame):
+            if self._active_assistant_turn_id and self._assistant_text_parts:
+                text = "".join(self._assistant_text_parts).strip()
+                if text:
+                    created_at = iso_now()
+                    self._store.append_transcript_event(
+                        TranscriptEventRecord(
+                            id=f"evt_{uuid.uuid4().hex[:12]}",
+                            conversationId=self._conversation_id,
+                            sessionId=self._session_id,
+                            turnId=self._active_assistant_turn_id,
+                            role="assistant",
+                            kind="final",
+                            text=text,
+                            createdAt=created_at,
+                        )
+                    )
+                    self._store.upsert_turn_from_transcript(
+                        conversation_id=self._conversation_id,
+                        session_id=self._session_id,
+                        turn_id=self._active_assistant_turn_id,
+                        role="assistant",
+                        text=text,
+                        created_at=created_at,
+                        latency_summary=self._latency.build_turn_summary(),
+                    )
+            self._active_assistant_turn_id = None
+            self._assistant_text_parts = []
+            return
+
+        if isinstance(frame, ErrorFrame):
+            self._store.append_session_event(
+                SessionEventRecord(
+                    id=f"evt_{uuid.uuid4().hex[:12]}",
+                    conversationId=self._conversation_id,
+                    sessionId=self._session_id,
+                    type="transport_failed",
+                    createdAt=iso_now(),
+                    details={"message": frame.error},
+                )
+            )
+
+    def _ensure_user_turn(self) -> str:
+        if self._active_user_turn_id is None:
+            self._active_user_turn_id = f"turn_{uuid.uuid4().hex[:12]}"
+        return self._active_user_turn_id
+
+
+def build_session_task(
+    *,
+    settings: Settings,
+    providers: ProviderBundle,
+    store: LocalSessionStore,
+    conversation_id: str,
+    session_id: str,
+    session_started_at: str | None,
+    webrtc_connection,
+):
+    latency = LatencyRecorder(store, conversation_id, session_id)
+    if session_started_at:
+        latency.seed_session_start(session_started_at)
+
+    transport = build_smallwebrtc_transport(
+        webrtc_connection,
+        input_sample_rate=settings.input_sample_rate,
+        output_sample_rate=settings.output_sample_rate,
+    )
+    observer = SessionObserver(
+        store=store,
+        latency=latency,
+        conversation_id=conversation_id,
+        session_id=session_id,
+    )
+
+    @transport.event_handler("on_client_connected")
+    async def on_client_connected(_transport, _connection):
+        await transport.capture_participant_audio()
+        store.append_session_event(
+            SessionEventRecord(
+                id=f"evt_{uuid.uuid4().hex[:12]}",
+                conversationId=conversation_id,
+                sessionId=session_id,
+                type="transport_connected",
+                createdAt=iso_now(),
+            )
+        )
+
+    context = LLMContext(
+        messages=[
+            {"role": "system", "content": settings.llm_system_prompt},
+        ]
+    )
+    context_aggregator = LLMContextAggregatorPair(context)
+
+    pipeline = Pipeline(
+        [
+            transport.input(),
+            providers.asr.build(),
+            context_aggregator.user(),
+            providers.llm.build(),
+            providers.tts.build(),
+            transport.output(),
+            context_aggregator.assistant(),
+        ]
+    )
+
+    task = PipelineTask(
+        pipeline,
+        params=PipelineParams(
+            audio_in_sample_rate=settings.input_sample_rate,
+            audio_out_sample_rate=settings.output_sample_rate,
+        ),
+        idle_timeout_secs=settings.session_idle_timeout_secs,
+        observers=[observer],
+    )
+
+    runner = PipelineRunner(handle_sigint=False, handle_sigterm=False)
+    return transport, task, runner
