@@ -1,0 +1,16 @@
+docs/
+.env
+.env.local
+.env.*.local
+apps/agent/.env
+apps/web/.env
+apps/web/.env.local
+node_modules/
+dist/
+build/
+coverage/
+.DS_Store
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc

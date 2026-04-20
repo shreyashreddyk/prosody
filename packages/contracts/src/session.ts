@@ -1,0 +1,11 @@
+export type TransportKind = "smallwebrtc" | "daily";
+export type SessionStatus = "idle" | "connecting" | "live" | "ended" | "failed";
+
+export interface Session {
+  id: string;
+  conversationId: string;
+  transportKind: TransportKind;
+  status: SessionStatus;
+  startedAt?: string;
+  endedAt?: string;
+}

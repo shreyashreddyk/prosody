@@ -1,0 +1,16 @@
+{
+  "name": "prosody",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/web",
+    "packages/contracts",
+    "packages/ui"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "dev:web": "npm run dev --workspace @prosody/web",
+    "dev:agent": ". .venv/bin/activate && set -a && . apps/agent/.env && set +a && .venv/bin/uvicorn app.main:app --app-dir apps/agent --reload"
+  }
+}

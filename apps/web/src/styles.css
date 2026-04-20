@@ -1,0 +1,157 @@
+:root {
+  color-scheme: dark;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  background:
+    radial-gradient(circle at top, rgba(73, 152, 255, 0.18), transparent 30%),
+    linear-gradient(180deg, #0d1118 0%, #06080c 100%);
+  color: #f4f7fb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: transparent;
+}
+
+button {
+  font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.app-shell {
+  padding: 32px;
+}
+
+.hero {
+  max-width: 860px;
+  margin: 0 auto 32px;
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: #93abc6;
+  font-size: 0.78rem;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(3rem, 7vw, 5.5rem);
+  line-height: 0.95;
+}
+
+.hero-copy {
+  max-width: 720px;
+  color: #c6d3e3;
+  font-size: 1.05rem;
+  line-height: 1.65;
+}
+
+.hero-actions,
+.control-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.workspace-preview {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.workspace-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.three-pane-layout {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr 1fr;
+  gap: 16px;
+}
+
+.muted {
+  color: #aab7c8;
+  line-height: 1.6;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.list li {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.transcript-card {
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(26, 35, 48, 0.72);
+  border: 1px solid rgba(148, 184, 255, 0.15);
+  margin-bottom: 16px;
+}
+
+.speaker {
+  margin-top: 0;
+  color: #7eb4ff;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.primary-button,
+.secondary-button {
+  border-radius: 999px;
+  padding: 12px 18px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.primary-button {
+  background: linear-gradient(135deg, #7eb4ff, #5fdfc8);
+  color: #06111a;
+  font-weight: 600;
+}
+
+.secondary-button {
+  background: transparent;
+  color: #edf3fb;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+@media (max-width: 1080px) {
+  .three-pane-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-shell {
+    padding: 20px;
+  }
+
+  .workspace-header {
+    flex-direction: column;
+  }
+}

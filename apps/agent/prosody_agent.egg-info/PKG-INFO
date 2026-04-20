@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: prosody-agent
+Version: 0.1.0
+Summary: Prosody FastAPI agent scaffold
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi<1.0,>=0.115
+Requires-Dist: uvicorn<1.0,>=0.32
+Requires-Dist: pydantic<3.0,>=2.9
+Requires-Dist: httpx<1.0,>=0.28
+Requires-Dist: pytest<9.0,>=8.3
+
+# Prosody Agent
+
+This package hosts the minimal FastAPI service for Prosody. It currently exposes health and metadata endpoints only and reserves module boundaries for future Pipecat orchestration, provider adapters, transports, session management, replay, and storage integrations.
