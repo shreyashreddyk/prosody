@@ -17,6 +17,13 @@ class ProviderConfigState(BaseModel):
     supabase_configured: bool
 
 
+class SupabaseState(BaseModel):
+    url_configured: bool
+    service_role_configured: bool
+    jwks_reachable: bool = False
+    rest_reachable: bool = False
+
+
 class MetaResponse(BaseModel):
     service: str
     version: str
@@ -24,6 +31,12 @@ class MetaResponse(BaseModel):
     intended_local_transport: str
     intended_deployed_transport: str
     provider_config: ProviderConfigState
+    supabase: SupabaseState
+
+
+class AuthenticatedUser(BaseModel):
+    id: str
+    email: str | None = None
 
 
 class LocalSessionCreateRequest(BaseModel):
@@ -37,6 +50,8 @@ class SessionRecord(BaseModel):
     status: Literal["idle", "connecting", "live", "ended", "failed"] = "idle"
     startedAt: str | None = None
     endedAt: str | None = None
+    createdAt: str | None = None
+    updatedAt: str | None = None
 
 
 class LocalSessionCreateResponse(BaseModel):
@@ -98,9 +113,20 @@ class TurnRecord(BaseModel):
     id: str
     conversationId: str
     sessionId: str
-    role: Literal["user", "assistant", "system"]
-    transcriptText: str
+    turnIndex: int
+    userText: str | None = None
+    assistantText: str | None = None
+    userAudioCaptureStartAt: str | None = None
+    firstAsrPartialAt: str | None = None
+    finalAsrAt: str | None = None
+    llmRequestStartAt: str | None = None
+    llmFirstTokenAt: str | None = None
+    ttsRequestStartAt: str | None = None
+    ttsFirstByteAt: str | None = None
+    playbackStartAt: str | None = None
+    completedAt: str | None = None
     createdAt: str
+    updatedAt: str | None = None
     latencySummary: TurnLatencySummaryRecord | None = None
 
 

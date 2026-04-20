@@ -35,8 +35,19 @@ export interface Turn {
   id: string;
   conversationId: string;
   sessionId: string;
-  role: TurnRole;
-  transcriptText: string;
+  turnIndex: number;
+  userText?: string;
+  assistantText?: string;
+  userAudioCaptureStartAt?: string;
+  firstAsrPartialAt?: string;
+  finalAsrAt?: string;
+  llmRequestStartAt?: string;
+  llmFirstTokenAt?: string;
+  ttsRequestStartAt?: string;
+  ttsFirstByteAt?: string;
+  playbackStartAt?: string;
+  completedAt?: string;
   createdAt: string;
+  updatedAt?: string;
   latencySummary?: TurnLatencySummary;
 }

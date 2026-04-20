@@ -4,7 +4,8 @@ import uuid
 from datetime import UTC, datetime
 
 from app.models import LatencyEventRecord
-from app.storage.local_store import LocalSessionStore, normalize_latency_stage
+from app.storage.base import SessionStore
+from app.storage.local_store import normalize_latency_stage
 
 
 def iso_now() -> str:
@@ -16,7 +17,7 @@ def parse_iso(value: str) -> datetime:
 
 
 class LatencyRecorder:
-    def __init__(self, store: LocalSessionStore, conversation_id: str, session_id: str):
+    def __init__(self, store: SessionStore, conversation_id: str, session_id: str):
         self._store = store
         self._conversation_id = conversation_id
         self._session_id = session_id

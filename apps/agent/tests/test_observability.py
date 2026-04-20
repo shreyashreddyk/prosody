@@ -4,18 +4,25 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.auth import get_current_user
 from app.main import app
-from app.models import LatencyEventRecord, SessionEventRecord, TranscriptEventRecord
+from app.models import AuthenticatedUser, LatencyEventRecord, SessionEventRecord, TranscriptEventRecord
 from app.replay.service import build_session_timeline, generate_replay_artifact
 from app.storage.local_store import LocalSessionStore
 
 
 def _configure_env(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("PROSODY_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "test-deepgram")
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-eleven")
     monkeypatch.setenv("ELEVENLABS_VOICE_ID", "voice-id")
+
+
+def _override_user() -> AuthenticatedUser:
+    return AuthenticatedUser(id="user_test", email="user@example.com")
 
 
 def _append_session_started(store: LocalSessionStore, conversation_id: str, session_id: str, created_at: str) -> None:
@@ -107,45 +114,10 @@ def test_timeline_ordering_and_missing_events_are_preserved(tmp_path: Path) -> N
     store = LocalSessionStore(tmp_path)
     session = store.create_session("conv_partial")
     _append_session_started(store, session.conversationId, session.id, "2026-04-20T13:00:00Z")
-    _append_latency(
-        store,
-        session.conversationId,
-        session.id,
-        "lat_session",
-        "session_start",
-        "2026-04-20T13:00:00Z",
-        duration_ms=0.0,
-    )
-    _append_latency(
-        store,
-        session.conversationId,
-        session.id,
-        "lat_turn_audio",
-        "first_user_audio",
-        "2026-04-20T13:00:01Z",
-        turn_id="turn_partial",
-        duration_ms=0.0,
-    )
-    _append_latency(
-        store,
-        session.conversationId,
-        session.id,
-        "lat_turn_final_asr",
-        "final_asr",
-        "2026-04-20T13:00:01.400000Z",
-        turn_id="turn_partial",
-        duration_ms=400.0,
-    )
-    _append_latency(
-        store,
-        session.conversationId,
-        session.id,
-        "lat_turn_llm_start",
-        "llm_request_start",
-        "2026-04-20T13:00:01.500000Z",
-        turn_id="turn_partial",
-        duration_ms=500.0,
-    )
+    _append_latency(store, session.conversationId, session.id, "lat_session", "session_start", "2026-04-20T13:00:00Z", duration_ms=0.0)
+    _append_latency(store, session.conversationId, session.id, "lat_turn_audio", "first_user_audio", "2026-04-20T13:00:01Z", turn_id="turn_partial", duration_ms=0.0)
+    _append_latency(store, session.conversationId, session.id, "lat_turn_final_asr", "final_asr", "2026-04-20T13:00:01.400000Z", turn_id="turn_partial", duration_ms=400.0)
+    _append_latency(store, session.conversationId, session.id, "lat_turn_llm_start", "llm_request_start", "2026-04-20T13:00:01.500000Z", turn_id="turn_partial", duration_ms=500.0)
     store.append_transcript_event(
         TranscriptEventRecord(
             id="evt_user_final",
@@ -182,11 +154,14 @@ def test_timeline_ordering_and_missing_events_are_preserved(tmp_path: Path) -> N
     assert timeline.replayArtifactStatus.available is True
 
 
-def test_timeline_route_supports_persisted_session_reload(tmp_path: Path, monkeypatch) -> None:
+def test_timeline_route_supports_persisted_session_reload_with_auth(tmp_path: Path, monkeypatch) -> None:
     _configure_env(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
-        create_response = client.post("/api/local/sessions", json={})
+        seed = client.app.state.store.create_session("conv_reload")
+        client.app.dependency_overrides[get_current_user] = _override_user
+
+        create_response = client.post("/api/local/sessions", json={"conversation_id": seed.conversationId})
         session_id = create_response.json()["session"]["id"]
         end_response = client.post(f"/api/local/sessions/{session_id}/end")
         assert end_response.status_code == 200
@@ -197,15 +172,27 @@ def test_timeline_route_supports_persisted_session_reload(tmp_path: Path, monkey
         assert payload["replayArtifactStatus"]["available"] is True
         assert "timeline" in payload
 
+        client.app.dependency_overrides.clear()
+
     with TestClient(app) as client:
+        client.app.dependency_overrides[get_current_user] = _override_user
         timeline_response = client.get(f"/api/local/sessions/{session_id}/timeline")
         assert timeline_response.status_code == 200
         assert timeline_response.json()["session"]["id"] == session_id
+        client.app.dependency_overrides.clear()
 
 
-def test_timeline_route_returns_404_for_unknown_session(tmp_path: Path, monkeypatch) -> None:
+def test_timeline_route_returns_404_for_foreign_session(tmp_path: Path, monkeypatch) -> None:
     _configure_env(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
+        client.app.dependency_overrides[get_current_user] = _override_user
+
+        def deny_session_owner(session_id: str, user_id: str):
+            raise KeyError(f"Unknown session: {session_id}")
+
+        client.app.state.store.ensure_session_owner = deny_session_owner
+
         response = client.get("/api/local/sessions/sess_missing/timeline")
         assert response.status_code == 404
+        client.app.dependency_overrides.clear()

@@ -40,7 +40,7 @@ class LocalSessionStore:
         self._root_dir = root_dir
         self._root_dir.mkdir(parents=True, exist_ok=True)
 
-    def create_session(self, conversation_id: str | None = None) -> SessionRecord:
+    def create_session(self, conversation_id: str | None = None, owner_user_id: str | None = None) -> SessionRecord:
         conversation_id = conversation_id or f"conv_{uuid.uuid4().hex[:12]}"
         session_id = f"sess_{uuid.uuid4().hex[:12]}"
         started_at = iso_now()
@@ -50,6 +50,8 @@ class LocalSessionStore:
             transportKind="smallwebrtc",
             status="connecting",
             startedAt=started_at,
+            createdAt=started_at,
+            updatedAt=started_at,
         )
         session_dir = self.session_dir(conversation_id, session_id)
         session_dir.mkdir(parents=True, exist_ok=True)
@@ -68,6 +70,21 @@ class LocalSessionStore:
     def load_session(self, conversation_id: str, session_id: str) -> SessionRecord:
         payload = self._read_json(self.session_dir(conversation_id, session_id) / "session.json")
         return SessionRecord.model_validate(payload)
+
+    def load_session_by_id(self, session_id: str) -> SessionRecord:
+        for conv_dir in (self._root_dir / "conversations").glob("*"):
+            session_path = conv_dir / "sessions" / session_id / "session.json"
+            if session_path.exists():
+                return SessionRecord.model_validate(self._read_json(session_path))
+        raise KeyError(f"Unknown session: {session_id}")
+
+    def ensure_conversation_owner(self, conversation_id: str, user_id: str) -> None:
+        conversation_dir = self._root_dir / "conversations" / conversation_id
+        if not conversation_dir.exists():
+            raise KeyError(f"Unknown conversation: {conversation_id}")
+
+    def ensure_session_owner(self, session_id: str, user_id: str) -> SessionRecord:
+        return self.load_session_by_id(session_id)
 
     def save_session(self, session: SessionRecord) -> None:
         self._write_json(
@@ -246,16 +263,28 @@ class LocalSessionStore:
         turns = self.load_turns(conversation_id, session_id)
         existing = next((turn for turn in turns if turn.id == turn_id), None)
         if existing:
-            existing.transcriptText = text
+            if role == "user":
+                existing.userText = text
+                if existing.finalAsrAt is None:
+                    existing.finalAsrAt = created_at
+            else:
+                existing.assistantText = text
+                if existing.completedAt is None:
+                    existing.completedAt = created_at
+            existing.updatedAt = created_at
         else:
             turns.append(
                 TurnRecord(
                     id=turn_id,
                     conversationId=conversation_id,
                     sessionId=session_id,
-                    role=role,
-                    transcriptText=text,
+                    turnIndex=len(turns) + 1,
+                    userText=text if role == "user" else None,
+                    assistantText=text if role == "assistant" else None,
+                    finalAsrAt=created_at if role == "user" else None,
+                    completedAt=created_at if role == "assistant" else None,
                     createdAt=created_at,
+                    updatedAt=created_at,
                 )
             )
         self.save_turns(conversation_id, session_id, turns)

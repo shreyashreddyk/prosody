@@ -1,3 +1,4 @@
+export * from "./auth";
 export * from "./conversation";
 export * from "./events";
 export * from "./flashcards";

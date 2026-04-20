@@ -8,4 +8,6 @@ export interface Session {
   status: SessionStatus;
   startedAt?: string;
   endedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }

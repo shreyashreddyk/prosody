@@ -7,5 +7,6 @@ export interface Conversation {
   createdAt: string;
   updatedAt: string;
   lastSessionId?: string;
-  summary?: string;
+  lastActivityAt?: string;
+  latestSummary?: string;
 }

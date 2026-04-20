@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from app.metrics.latency import iso_now, parse_iso
 from app.models import (
@@ -15,7 +16,8 @@ from app.models import (
     TurnLatencySummaryRecord,
     TurnTimingRecord,
 )
-from app.storage.local_store import LocalSessionStore, normalize_latency_stage
+from app.storage.base import SessionStore
+from app.storage.local_store import normalize_latency_stage
 
 
 TURN_STAGE_TO_ATTR = {
@@ -59,7 +61,7 @@ class SessionArtifacts:
 
 
 def build_session_timeline(
-    store: LocalSessionStore,
+    store: SessionStore,
     conversation_id: str,
     session_id: str,
 ) -> SessionTimelineResponse:
@@ -86,7 +88,7 @@ def build_session_timeline(
 
 
 def generate_replay_artifact(
-    store: LocalSessionStore,
+    store: SessionStore,
     conversation_id: str,
     session_id: str,
 ) -> ReplayArtifactRecord:

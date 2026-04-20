@@ -7,6 +7,11 @@ export interface Source {
   kind: SourceKind;
   filename: string;
   mimeType: string;
+  storageBucket?: string;
   storagePath?: string;
+  sizeBytes?: number;
   processingStatus: SourceProcessingStatus;
+  errorMessage?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }

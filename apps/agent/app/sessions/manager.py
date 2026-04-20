@@ -15,6 +15,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 
 from app.config import Settings
 from app.models import (
+    AuthenticatedUser,
     LatencyEventRecord,
     LocalSessionCreateResponse,
     LocalSessionEventsResponse,
@@ -28,7 +29,8 @@ from app.models import (
 from app.orchestrator.pipeline import build_session_task
 from app.providers.factory import ProviderFactory
 from app.replay.service import build_session_timeline, generate_replay_artifact
-from app.storage.local_store import LocalSessionStore, iso_now
+from app.storage.base import SessionStore
+from app.storage.local_store import iso_now
 
 
 @dataclass
@@ -42,14 +44,20 @@ class RealtimeSession:
 
 
 class SessionManager:
-    def __init__(self, settings: Settings, store: LocalSessionStore):
+    def __init__(self, settings: Settings, store: SessionStore):
         self._settings = settings
         self._store = store
         self._providers = ProviderFactory(settings)
         self._sessions: dict[str, RealtimeSession] = {}
 
-    def create_session(self, base_url: str, conversation_id: str | None = None) -> LocalSessionCreateResponse:
-        session = self._store.create_session(conversation_id=conversation_id)
+    def create_session(
+        self,
+        base_url: str,
+        *,
+        conversation_id: str | None = None,
+        user: AuthenticatedUser,
+    ) -> LocalSessionCreateResponse:
+        session = self._store.create_session(conversation_id=conversation_id, owner_user_id=user.id)
         self._store.append_session_event(
             SessionEventRecord(
                 id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -193,19 +201,15 @@ class SessionManager:
 
     def _require_session(self, session_id: str) -> RealtimeSession:
         if session_id not in self._sessions:
-            for conv_dir in (self._settings.data_dir / "conversations").glob("*"):
-                session_path = conv_dir / "sessions" / session_id / "session.json"
-                if session_path.exists():
-                    session = self._store.load_session(conv_dir.name, session_id)
-                    realtime = RealtimeSession(
-                        session=session,
-                        request_handler=SmallWebRTCRequestHandler(
-                            ice_servers=self._settings.smallwebrtc_ice_servers,
-                            connection_mode=ConnectionMode.SINGLE,
-                        ),
-                    )
-                    self._sessions[session_id] = realtime
-                    break
+            session = self._store.load_session_by_id(session_id)
+            realtime = RealtimeSession(
+                session=session,
+                request_handler=SmallWebRTCRequestHandler(
+                    ice_servers=self._settings.smallwebrtc_ice_servers,
+                    connection_mode=ConnectionMode.SINGLE,
+                ),
+            )
+            self._sessions[session_id] = realtime
         realtime = self._sessions.get(session_id)
         if not realtime:
             raise KeyError(f"Unknown session: {session_id}")

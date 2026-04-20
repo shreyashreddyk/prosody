@@ -4,41 +4,60 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.auth import get_current_user
 from app.config import Settings
 from app.main import app
-from app.models import LatencyEventRecord, SessionEventRecord, TranscriptEventRecord
+from app.models import AuthenticatedUser, LatencyEventRecord, SessionEventRecord, TranscriptEventRecord
 from app.providers.factory import ProviderFactory
 from app.storage.local_store import LocalSessionStore, iso_now
 
 
 def _configure_env(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("PROSODY_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "test-deepgram")
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-eleven")
     monkeypatch.setenv("ELEVENLABS_VOICE_ID", "voice-id")
 
 
-def test_create_and_end_local_session(tmp_path: Path, monkeypatch) -> None:
+def _override_user() -> AuthenticatedUser:
+    return AuthenticatedUser(id="user_test", email="user@example.com")
+
+
+def test_create_and_end_local_session_requires_auth_and_persists_events(tmp_path: Path, monkeypatch) -> None:
     _configure_env(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
-        create_response = client.post("/api/local/sessions", json={})
-        assert create_response.status_code == 200
-        payload = create_response.json()
-        assert payload["session"]["transportKind"] == "smallwebrtc"
-        assert payload["session"]["status"] == "connecting"
-        assert payload["offerEndpoint"].endswith(f"/api/local/sessions/{payload['session']['id']}/offer")
+      seed = client.app.state.store.create_session("conv_auth")
+      client.app.dependency_overrides[get_current_user] = _override_user
 
-        events_response = client.get(f"/api/local/sessions/{payload['session']['id']}/events")
-        assert events_response.status_code == 200
-        events_payload = events_response.json()
-        assert events_payload["latencyEvents"][0]["stage"] == "session_start"
-        assert events_payload["sessionEvents"][0]["type"] == "session_started"
+      create_response = client.post("/api/local/sessions", json={"conversation_id": seed.conversationId})
+      assert create_response.status_code == 200
+      payload = create_response.json()
+      assert payload["session"]["transportKind"] == "smallwebrtc"
+      assert payload["session"]["status"] == "connecting"
 
-        end_response = client.post(f"/api/local/sessions/{payload['session']['id']}/end")
-        assert end_response.status_code == 200
-        assert end_response.json()["status"] == "ended"
+      events_response = client.get(f"/api/local/sessions/{payload['session']['id']}/events")
+      assert events_response.status_code == 200
+      events_payload = events_response.json()
+      assert events_payload["latencyEvents"][0]["stage"] == "session_start"
+      assert events_payload["sessionEvents"][0]["type"] == "session_started"
+
+      end_response = client.post(f"/api/local/sessions/{payload['session']['id']}/end")
+      assert end_response.status_code == 200
+      assert end_response.json()["status"] == "ended"
+
+      client.app.dependency_overrides.clear()
+
+
+def test_local_session_routes_reject_missing_auth(tmp_path: Path, monkeypatch) -> None:
+    _configure_env(tmp_path, monkeypatch)
+
+    with TestClient(app) as client:
+        response = client.post("/api/local/sessions", json={"conversation_id": "conv_missing"})
+    assert response.status_code == 401
 
 
 def test_provider_factory_uses_openai_by_default(tmp_path: Path, monkeypatch) -> None:

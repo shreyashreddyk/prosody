@@ -8,8 +8,19 @@ Requires-Dist: fastapi<1.0,>=0.115
 Requires-Dist: uvicorn<1.0,>=0.32
 Requires-Dist: pydantic<3.0,>=2.9
 Requires-Dist: httpx<1.0,>=0.28
+Requires-Dist: PyJWT[crypto]<3.0,>=2.10
+Requires-Dist: openai<3.0,>=2.0
+Requires-Dist: pipecat-ai[deepgram,elevenlabs,openai,webrtc]<0.1,>=0.0.108
 Requires-Dist: pytest<9.0,>=8.3
 
 # Prosody Agent
 
-This package hosts the minimal FastAPI service for Prosody. It currently exposes health and metadata endpoints only and reserves module boundaries for future Pipecat orchestration, provider adapters, transports, session management, replay, and storage integrations.
+This package hosts the FastAPI realtime agent for Prosody.
+
+Current local v1 responsibilities:
+
+- health and metadata endpoints
+- local session creation and teardown
+- SmallWebRTC offer/ICE handling
+- Pipecat pipeline orchestration for Deepgram Flux, OpenAI, and ElevenLabs
+- local JSON/JSONL persistence for sessions, transcripts, turns, and latency events

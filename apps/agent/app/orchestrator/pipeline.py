@@ -25,7 +25,8 @@ from app.config import Settings
 from app.metrics.latency import LatencyRecorder
 from app.models import SessionEventRecord, TranscriptEventRecord
 from app.providers.factory import ProviderBundle
-from app.storage.local_store import LocalSessionStore, iso_now
+from app.storage.base import SessionStore
+from app.storage.local_store import iso_now
 from app.transports.local_webrtc import build_smallwebrtc_transport
 
 
@@ -33,7 +34,7 @@ class SessionObserver(BaseObserver):
     def __init__(
         self,
         *,
-        store: LocalSessionStore,
+        store: SessionStore,
         latency: LatencyRecorder,
         conversation_id: str,
         session_id: str,
@@ -92,7 +93,7 @@ class SessionObserver(BaseObserver):
             self._store.upsert_turn_from_transcript(
                 conversation_id=self._conversation_id,
                 session_id=self._session_id,
-                turn_id=f"{turn_id}:user",
+                turn_id=turn_id,
                 role="user",
                 text=frame.text,
                 created_at=created_at,
@@ -174,7 +175,7 @@ class SessionObserver(BaseObserver):
         self._store.upsert_turn_from_transcript(
             conversation_id=self._conversation_id,
             session_id=self._session_id,
-            turn_id=f"{self._active_turn_id}:assistant",
+            turn_id=self._active_turn_id,
             role="assistant",
             text=text,
             created_at=created_at,
@@ -193,7 +194,7 @@ def build_session_task(
     *,
     settings: Settings,
     providers: ProviderBundle,
-    store: LocalSessionStore,
+    store: SessionStore,
     conversation_id: str,
     session_id: str,
     session_started_at: str | None,
