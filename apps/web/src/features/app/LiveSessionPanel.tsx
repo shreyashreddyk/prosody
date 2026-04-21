@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { PipecatClient, type RTVIMessage, type TransportState } from "@pipecat-ai/client-js";
-import { SmallWebRTCTransport, WavMediaManager } from "@pipecat-ai/small-webrtc-transport";
+import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
 import type {
   DegradationEvent,
   RealtimeConnectionState,
@@ -208,9 +208,7 @@ export function useLiveSession({
       offerEndpoint,
     }, sessionId);
     const client = new PipecatClient({
-      transport: new SmallWebRTCTransport({
-        mediaManager: new WavMediaManager(undefined, 16000),
-      }),
+      transport: new SmallWebRTCTransport(),
       enableMic: true,
       enableCam: false,
       callbacks: {

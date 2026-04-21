@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class HealthResponse(BaseModel):
@@ -252,9 +252,11 @@ class SmallWebRTCOfferResponse(BaseModel):
 
 
 class IceCandidateRecord(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     candidate: str
-    sdp_mid: str
-    sdp_mline_index: int
+    sdp_mid: str = Field(alias="sdpMid")
+    sdp_mline_index: int = Field(alias="sdpMLineIndex")
 
 
 class SmallWebRTCPatchRequestModel(BaseModel):
