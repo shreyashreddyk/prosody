@@ -6,18 +6,21 @@ import { useAuth } from "./AuthProvider";
 export function AuthCallbackPage() {
   const navigate = useNavigate();
   const { session } = useAuth();
+  const code = new URLSearchParams(window.location.search).get("code");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [exchanging, setExchanging] = useState(Boolean(code));
 
   useEffect(() => {
     const exchange = async () => {
-      const code = new URLSearchParams(window.location.search).get("code");
       if (!code) {
+        setExchanging(false);
         return;
       }
 
       const { error } = await supabase.auth.exchangeCodeForSession(code);
       if (error) {
         setErrorMessage(error.message);
+        setExchanging(false);
         return;
       }
 
@@ -25,9 +28,9 @@ export function AuthCallbackPage() {
     };
 
     void exchange();
-  }, [navigate]);
+  }, [code, navigate]);
 
-  if (session) {
+  if (!code && session) {
     return <Navigate to="/app" replace />;
   }
 
@@ -36,7 +39,12 @@ export function AuthCallbackPage() {
       <div className="glass-card">
         <p className="eyebrow">Prosody</p>
         <h1>Completing sign-in</h1>
-        <p>{errorMessage ?? "We are finishing your Google sign-in and redirecting you into the app."}</p>
+        <p>
+          {errorMessage ??
+            (exchanging
+              ? "We are finishing your Google sign-in and redirecting you into the app."
+              : "We could not complete sign-in automatically. Please try signing in again.")}
+        </p>
       </div>
     </main>
   );

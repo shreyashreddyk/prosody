@@ -233,7 +233,7 @@ class SessionResilienceCoordinator:
         created_at: str | None = None,
     ) -> DegradationEventRecord:
         event = DegradationEventRecord(
-            id=f"deg_{uuid.uuid4().hex[:12]}",
+            id=str(uuid.uuid4()),
             conversationId=self._session.conversationId,
             sessionId=self._session.id,
             turnId=turn_id,

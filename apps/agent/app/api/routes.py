@@ -99,6 +99,8 @@ def create_local_session(
         return _manager(request).create_session(base_url, conversation_id=payload.conversation_id, user=user)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/api/local/sessions/{session_id}/offer", response_model=SmallWebRTCOfferResponse)
@@ -115,6 +117,8 @@ async def create_offer(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/api/local/sessions/{session_id}/resume", response_model=LocalSessionCreateResponse)
@@ -131,6 +135,8 @@ def resume_local_session(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.patch("/api/local/sessions/{session_id}/offer", status_code=204)
@@ -145,6 +151,8 @@ async def patch_offer(
         await _manager(request).handle_patch(session_id, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/api/local/sessions/{session_id}/end", response_model=SessionRecord)
@@ -158,6 +166,8 @@ async def end_local_session(
         return await _manager(request).end_session(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/api/local/sessions/{session_id}/events", response_model=LocalSessionEventsResponse)
@@ -171,6 +181,8 @@ def get_local_session_events(
         return _manager(request).get_events(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/api/local/sessions/{session_id}/timeline", response_model=SessionTimelineResponse)
@@ -184,3 +196,5 @@ def get_local_session_timeline(
         return _manager(request).get_timeline(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

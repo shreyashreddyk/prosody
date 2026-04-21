@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -180,3 +181,19 @@ def test_transport_disconnect_resume_and_expiry_are_persisted(tmp_path: Path, mo
         assert snapshot.session.status == "failed"
         assert snapshot.sessionEvents[-1].type == "transport_failed"
         client.app.dependency_overrides.clear()
+
+
+def test_latency_and_degradation_events_use_uuid_ids(tmp_path: Path) -> None:
+    store, session, coordinator, observer = _build_observer(tmp_path)
+
+    async def run_case():
+        await observer.on_push_frame(SimpleNamespace(frame=InputAudioRawFrame(b"\x00\x00", 16000, 1)))
+        coordinator.on_transport_disconnected()
+        await asyncio.sleep(0)
+
+    asyncio.run(run_case())
+
+    snapshot = store.load_events(session.conversationId, session.id)
+    degradation_events = store.load_degradation_events(session.conversationId, session.id)
+    uuid.UUID(snapshot.latencyEvents[0].id)
+    uuid.UUID(degradation_events[0].id)

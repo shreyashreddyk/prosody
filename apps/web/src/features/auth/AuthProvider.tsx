@@ -20,14 +20,44 @@ export function AuthProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     let mounted = true;
 
-    supabase.auth.getSession().then(({ data }) => {
+    const syncSession = async () => {
+      const {
+        data: { session: nextSession },
+      } = await supabase.auth.getSession();
+
       if (!mounted) {
         return;
       }
-      setSession(data.session ?? null);
-      setUser(data.session?.user ?? null);
+
+      if (!nextSession) {
+        setSession(null);
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
+      const { data: userData, error } = await supabase.auth.getUser();
+      if (!mounted) {
+        return;
+      }
+
+      if (error || !userData.user) {
+        await supabase.auth.signOut();
+        if (!mounted) {
+          return;
+        }
+        setSession(null);
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
+      setSession(nextSession);
+      setUser(userData.user);
       setLoading(false);
-    });
+    };
+
+    void syncSession();
 
     const {
       data: { subscription }

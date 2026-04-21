@@ -50,7 +50,7 @@ class LatencyRecorder:
 
         duration_ms = self._build_duration_ms(normalized_stage, turn_id, started_at)
         event = LatencyEventRecord(
-            id=f"lat_{uuid.uuid4().hex[:12]}",
+            id=str(uuid.uuid4()),
             conversationId=self._conversation_id,
             sessionId=self._session_id,
             turnId=turn_id,

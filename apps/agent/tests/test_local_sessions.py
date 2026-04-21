@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -43,6 +44,7 @@ def test_create_and_end_local_session_requires_auth_and_persists_events(tmp_path
       assert events_response.status_code == 200
       events_payload = events_response.json()
       assert events_payload["latencyEvents"][0]["stage"] == "session_start"
+      uuid.UUID(events_payload["latencyEvents"][0]["id"])
       assert events_payload["sessionEvents"][0]["type"] == "session_started"
 
       end_response = client.post(f"/api/local/sessions/{payload['session']['id']}/end")
@@ -58,6 +60,52 @@ def test_local_session_routes_reject_missing_auth(tmp_path: Path, monkeypatch) -
     with TestClient(app) as client:
         response = client.post("/api/local/sessions", json={"conversation_id": "conv_missing"})
     assert response.status_code == 401
+
+
+def test_local_session_create_route_handles_allowed_cors_preflight(tmp_path: Path, monkeypatch) -> None:
+    _configure_env(tmp_path, monkeypatch)
+
+    with TestClient(app) as client:
+        response = client.options(
+            "/api/local/sessions",
+            headers={
+                "Origin": "http://127.0.0.1:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+    assert "POST" in response.headers["access-control-allow-methods"]
+    allow_headers = response.headers["access-control-allow-headers"].lower()
+    assert "authorization" in allow_headers
+    assert "content-type" in allow_headers
+
+
+def test_local_session_offer_route_handles_allowed_cors_preflight(tmp_path: Path, monkeypatch) -> None:
+    _configure_env(tmp_path, monkeypatch)
+
+    with TestClient(app) as client:
+        seed = client.app.state.store.create_session("conv_offer")
+        client.app.dependency_overrides[get_current_user] = _override_user
+        create_response = client.post("/api/local/sessions", json={"conversation_id": seed.conversationId})
+        session_id = create_response.json()["session"]["id"]
+
+        response = client.options(
+            f"/api/local/sessions/{session_id}/offer",
+            headers={
+                "Origin": "http://127.0.0.1:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+        assert "POST" in response.headers["access-control-allow-methods"]
+        assert "content-type" in response.headers["access-control-allow-headers"].lower()
+        client.app.dependency_overrides.clear()
 
 
 def test_provider_factory_uses_openai_by_default(tmp_path: Path, monkeypatch) -> None:

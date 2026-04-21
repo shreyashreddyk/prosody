@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import uuid
 
 from pipecat.frames.frames import (
@@ -31,6 +32,8 @@ from app.storage.base import SessionStore
 from app.storage.local_store import iso_now
 from app.transports.local_webrtc import build_smallwebrtc_transport
 
+logger = logging.getLogger(__name__)
+
 
 class SessionObserver(BaseObserver):
     def __init__(
@@ -52,6 +55,7 @@ class SessionObserver(BaseObserver):
         self._assistant_text_parts: list[str] = []
         self._assistant_transcript_persisted = False
         self._suppress_until_next_user_audio = False
+        self._logged_turn_stages: set[tuple[str, str]] = set()
 
     async def on_push_frame(self, data: FramePushed):
         frame = data.frame
@@ -67,6 +71,7 @@ class SessionObserver(BaseObserver):
             created_at = getattr(frame, "timestamp", None) or iso_now()
             self._latency.record_stage("first_asr_partial", turn_id=turn_id, occurred_at=created_at)
             self._resilience.on_asr_partial(turn_id)
+            self._log_turn_stage_once(turn_id, "first_asr_partial", "First ASR partial received")
             self._store.append_transcript_event(
                 TranscriptEventRecord(
                     id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -85,6 +90,7 @@ class SessionObserver(BaseObserver):
             turn_id = self._ensure_turn()
             self._latency.record_stage("first_user_audio", turn_id=turn_id)
             self._resilience.on_first_user_audio(turn_id)
+            self._log_turn_stage_once(turn_id, "first_user_audio", "First user audio frame received")
             return
 
         if isinstance(frame, TranscriptionFrame):
@@ -92,6 +98,7 @@ class SessionObserver(BaseObserver):
             created_at = getattr(frame, "timestamp", None) or iso_now()
             self._latency.record_stage("final_asr", turn_id=turn_id, occurred_at=created_at)
             self._resilience.on_final_asr(turn_id)
+            self._log_turn_stage_once(turn_id, "final_asr", f"Final ASR received: {frame.text[:120]}")
             self._store.append_transcript_event(
                 TranscriptEventRecord(
                     id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -120,6 +127,7 @@ class SessionObserver(BaseObserver):
             turn_id = self._ensure_turn()
             self._latency.record_stage("llm_request_start", turn_id=turn_id)
             self._resilience.on_llm_request_start(turn_id)
+            self._log_turn_stage_once(turn_id, "llm_request_start", "LLM request started")
             return
 
         if isinstance(frame, LLMTextFrame):
@@ -127,12 +135,14 @@ class SessionObserver(BaseObserver):
             self._assistant_text_parts.append(frame.text)
             self._latency.record_stage("llm_first_token", turn_id=turn_id)
             self._resilience.on_llm_first_token(turn_id)
+            self._log_turn_stage_once(turn_id, "llm_first_token", f"LLM first token received: {frame.text[:120]}")
             return
 
         if isinstance(frame, TTSStartedFrame):
             turn_id = self._ensure_turn()
             self._latency.record_stage("tts_request_start", turn_id=turn_id)
             self._resilience.on_tts_request_start(turn_id)
+            self._log_turn_stage_once(turn_id, "tts_request_start", "TTS request started")
             return
 
         if isinstance(frame, TTSAudioRawFrame):
@@ -140,6 +150,7 @@ class SessionObserver(BaseObserver):
             self._latency.record_stage("tts_first_byte", turn_id=turn_id)
             self._latency.record_stage("playback_start", turn_id=turn_id)
             self._resilience.on_tts_first_byte(turn_id)
+            self._log_turn_stage_once(turn_id, "tts_first_byte", "First TTS audio frame received")
             return
 
         if isinstance(frame, LLMFullResponseEndFrame):
@@ -147,6 +158,7 @@ class SessionObserver(BaseObserver):
             return
 
         if isinstance(frame, ErrorFrame):
+            logger.error("Pipeline error frame for session %s: %s", self._session_id, frame.error)
             self._store.append_session_event(
                 SessionEventRecord(
                     id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -235,6 +247,13 @@ class SessionObserver(BaseObserver):
             self._assistant_transcript_persisted = False
         return self._active_turn_id
 
+    def _log_turn_stage_once(self, turn_id: str, stage: str, message: str) -> None:
+        key = (turn_id, stage)
+        if key in self._logged_turn_stages:
+            return
+        self._logged_turn_stages.add(key)
+        logger.info("Session %s turn %s %s", self._session_id, turn_id, message)
+
 
 def build_session_task(
     *,
@@ -268,6 +287,7 @@ def build_session_task(
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(_transport, _connection):
+        logger.info("SmallWebRTC client connected for session %s", session_id)
         await transport.capture_participant_audio()
         store.append_session_event(
             SessionEventRecord(
@@ -285,6 +305,7 @@ def build_session_task(
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(_transport, _connection):
+        logger.info("SmallWebRTC client disconnected for session %s", session_id)
         if on_transport_disconnected:
             result = on_transport_disconnected()
             if inspect.isawaitable(result):

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import { createConversation, loadBootstrap, loadConversationWorkspace, uploadSource } from "./data";
+import { getAgentBaseUrl } from "../../lib/supabase";
 import { AppHeader } from "./AppHeader";
 import { LeftPane } from "./LeftPane";
 import { CenterPane } from "./CenterPane";
@@ -58,7 +59,14 @@ export function AppShell() {
   const refreshWorkspace = async (targetConversationId: string) => {
     const nextWorkspace = await loadConversationWorkspace(targetConversationId);
     setWorkspace(nextWorkspace);
-    setSelectedSessionId((current) => current ?? nextWorkspace.sessions[0]?.id);
+    setSelectedSessionId((current) => {
+      if (!current) {
+        return nextWorkspace.sessions[0]?.id;
+      }
+      return nextWorkspace.sessions.some((session) => session.id === current)
+        ? current
+        : nextWorkspace.sessions[0]?.id;
+    });
   };
 
   useEffect(() => {
@@ -142,7 +150,7 @@ export function AppShell() {
     try {
       setSummaryLoading(true);
       const response = await fetch(
-        `${import.meta.env.VITE_AGENT_BASE_URL ?? "http://127.0.0.1:8000"}/api/conversations/${activeConversationId}/summary`,
+        `${getAgentBaseUrl()}/api/conversations/${activeConversationId}/summary`,
         {
           method: "POST",
           headers: {
@@ -165,7 +173,7 @@ export function AppShell() {
     try {
       setFlashcardsLoading(true);
       const response = await fetch(
-        `${import.meta.env.VITE_AGENT_BASE_URL ?? "http://127.0.0.1:8000"}/api/conversations/${activeConversationId}/sessions/${sessionId}/flashcards`,
+        `${getAgentBaseUrl()}/api/conversations/${activeConversationId}/sessions/${sessionId}/flashcards`,
         {
           method: "POST",
           headers: {

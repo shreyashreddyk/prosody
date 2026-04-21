@@ -37,7 +37,6 @@ TURN_STAGE_FIELD = {
     "turn_completed": "completed_at",
 }
 
-
 def normalize_latency_stage(stage: str) -> str:
     return {
         "first_transcript_partial": "first_asr_partial",
@@ -123,17 +122,20 @@ class SupabaseSessionStore:
             raise ValueError("conversation_id and owner_user_id are required")
         session_id = str(uuid.uuid4())
         started_at = iso_now()
-        payload = {
-            "id": session_id,
-            "conversation_id": conversation_id,
-            "owner_user_id": owner_user_id,
-            "status": "connecting",
-            "transport": "smallwebrtc",
-            "started_at": started_at,
-            "created_at": started_at,
-            "updated_at": started_at,
-        }
-        self._post("sessions", payload)
+        self._post_with_variants(
+            "sessions",
+            self._session_payload_variants(
+                session_id=session_id,
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                transport_kind="smallwebrtc",
+                status="connecting",
+                started_at=started_at,
+                ended_at=None,
+                created_at=started_at,
+                updated_at=started_at,
+            ),
+        )
         self._touch_conversation(conversation_id)
         return SessionRecord(
             id=session_id,
@@ -161,14 +163,22 @@ class SupabaseSessionStore:
         return self._map_session(response[0])
 
     def save_session(self, session: SessionRecord) -> None:
-        payload = {
-            "status": session.status,
-            "transport": session.transportKind,
-            "started_at": session.startedAt,
-            "ended_at": session.endedAt,
-            "updated_at": iso_now(),
-        }
-        self._patch("sessions", payload, {"id": f"eq.{session.id}"})
+        self._patch_with_variants(
+            "sessions",
+            self._session_payload_variants(
+                session_id=session.id,
+                conversation_id=session.conversationId,
+                owner_user_id=self._session_owner_id(session.id),
+                transport_kind=session.transportKind,
+                status=session.status,
+                started_at=session.startedAt,
+                ended_at=session.endedAt,
+                created_at=session.createdAt,
+                updated_at=iso_now(),
+                include_identity=False,
+            ),
+            {"id": f"eq.{session.id}"},
+        )
         self._touch_conversation(session.conversationId)
 
     def append_session_event(self, event: SessionEventRecord) -> None:
@@ -180,20 +190,15 @@ class SupabaseSessionStore:
     def append_latency_event(self, event: LatencyEventRecord) -> None:
         self._latency_sequence[event.sessionId] += 1
         normalized_stage = normalize_latency_stage(event.stage)
-        self._post(
+        owner_user_id = self._session_owner_id(event.sessionId)
+        self._post_with_variants(
             "latency_events",
-            {
-                "id": event.id,
-                "session_id": event.sessionId,
-                "conversation_id": event.conversationId,
-                "owner_user_id": self._session_owner_id(event.sessionId),
-                "turn_id": event.turnId,
-                "name": normalized_stage,
-                "sequence": self._latency_sequence[event.sessionId],
-                "source": "agent",
-                "metadata": {"durationMs": event.durationMs},
-                "timestamp": event.startedAt,
-            },
+            self._latency_payload_variants(
+                event=event,
+                normalized_stage=normalized_stage,
+                owner_user_id=owner_user_id,
+                sequence=self._latency_sequence[event.sessionId],
+            ),
         )
         if event.turnId:
             field_name = TURN_STAGE_FIELD.get(normalized_stage)
@@ -201,29 +206,21 @@ class SupabaseSessionStore:
                 self._patch("turns", {field_name: event.startedAt, "updated_at": event.startedAt}, {"id": f"eq.{event.turnId}"})
 
     def append_degradation_event(self, event: DegradationEventRecord) -> None:
-        self._post(
+        self._post_with_variants(
             "degradation_events",
-            {
-                "id": event.id,
-                "conversation_id": event.conversationId,
-                "session_id": event.sessionId,
-                "owner_user_id": self._session_owner_id(event.sessionId),
-                "turn_id": event.turnId,
-                "category": event.category,
-                "severity": event.severity,
-                "provider": event.provider,
-                "code": event.code,
-                "message": event.message,
-                "details": event.details or {},
-                "created_at": event.createdAt,
-                "recovered_at": event.recoveredAt,
-            },
+            self._degradation_payload_variants(
+                event=event,
+                owner_user_id=self._session_owner_id(event.sessionId),
+            ),
         )
 
     def recover_degradation_event(self, conversation_id: str, session_id: str, event_id: str, recovered_at: str) -> None:
-        self._patch(
+        self._patch_with_variants(
             "degradation_events",
-            {"recovered_at": recovered_at},
+            [
+                {"recovery": recovered_at},
+                {"recovered_at": recovered_at},
+            ],
             {
                 "id": f"eq.{event_id}",
                 "conversation_id": f"eq.{conversation_id}",
@@ -277,14 +274,22 @@ class SupabaseSessionStore:
         return ReplayArtifactStatusRecord(available=False)
 
     def load_degradation_events(self, conversation_id: str, session_id: str) -> list[DegradationEventRecord]:
-        rows = self._get(
+        rows = self._get_with_variants(
             "degradation_events",
-            params={
-                "select": "*",
-                "conversation_id": f"eq.{conversation_id}",
-                "session_id": f"eq.{session_id}",
-                "order": "timestamp.asc",
-            },
+            [
+                {
+                    "select": "*",
+                    "conversation_id": f"eq.{conversation_id}",
+                    "session_id": f"eq.{session_id}",
+                    "order": "timestamp.asc",
+                },
+                {
+                    "select": "*",
+                    "conversation_id": f"eq.{conversation_id}",
+                    "session_id": f"eq.{session_id}",
+                    "order": "created_at.asc",
+                },
+            ],
         )
         return [
             DegradationEventRecord(
@@ -467,10 +472,123 @@ class SupabaseSessionStore:
         )
         payload: dict[str, str] = {}
         for row in rows:
-            field_name = TURN_STAGE_FIELD.get(normalize_latency_stage(row.get("name", "")))
+            field_name = TURN_STAGE_FIELD.get(normalize_latency_stage(row.get("name") or row.get("stage", "")))
             if field_name:
-                payload[field_name] = row.get("timestamp")
+                payload[field_name] = row.get("timestamp") or row.get("started_at")
         return payload
+
+    def _session_payload_variants(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        owner_user_id: str,
+        transport_kind: str,
+        status: str,
+        started_at: str | None,
+        ended_at: str | None,
+        created_at: str | None,
+        updated_at: str | None,
+        include_identity: bool = True,
+    ) -> list[dict]:
+        base_payload = {
+            "conversation_id": conversation_id,
+            "owner_user_id": owner_user_id,
+            "status": status,
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "created_at": created_at,
+            "updated_at": updated_at,
+        }
+        if include_identity:
+            base_payload["id"] = session_id
+
+        payloads = [
+            {**base_payload, "transport": transport_kind},
+            {**base_payload, "transport_kind": transport_kind},
+        ]
+
+        persisted_status = self._legacy_persisted_session_status(status)
+        if persisted_status != status:
+            payloads.extend(
+                [
+                    {**base_payload, "transport": transport_kind, "status": persisted_status},
+                    {**base_payload, "transport_kind": transport_kind, "status": persisted_status},
+                ]
+            )
+        return payloads
+
+    def _latency_payload_variants(
+        self,
+        *,
+        event: LatencyEventRecord,
+        normalized_stage: str,
+        owner_user_id: str,
+        sequence: int,
+    ) -> list[dict]:
+        base_payload = {
+            "id": event.id,
+            "session_id": event.sessionId,
+            "conversation_id": event.conversationId,
+            "owner_user_id": owner_user_id,
+            "turn_id": event.turnId,
+            "sequence": sequence,
+            "source": "agent",
+            "metadata": {"durationMs": event.durationMs},
+        }
+        return [
+            {
+                **base_payload,
+                "name": normalized_stage,
+                "timestamp": event.startedAt,
+            },
+            {
+                **base_payload,
+                "stage": normalized_stage,
+                "started_at": event.startedAt,
+                "completed_at": event.completedAt,
+                "duration_ms": event.durationMs,
+            },
+        ]
+
+    def _degradation_payload_variants(
+        self,
+        *,
+        event: DegradationEventRecord,
+        owner_user_id: str,
+    ) -> list[dict]:
+        base_payload = {
+            "id": event.id,
+            "conversation_id": event.conversationId,
+            "session_id": event.sessionId,
+            "owner_user_id": owner_user_id,
+            "turn_id": event.turnId,
+            "severity": event.severity,
+            "provider": event.provider,
+            "code": event.code,
+            "message": event.message,
+            "details": event.details or {},
+        }
+        return [
+            {
+                **base_payload,
+                "reason": event.category,
+                "timestamp": event.createdAt,
+                "recovery": event.recoveredAt,
+            },
+            {
+                **base_payload,
+                "category": event.category,
+                "created_at": event.createdAt,
+                "recovered_at": event.recoveredAt,
+            },
+        ]
+
+    def _legacy_persisted_session_status(self, status: str) -> str:
+        return {
+            "connecting": "live",
+            "reconnecting": "live",
+        }.get(status, status)
 
     def _map_session(self, row: dict) -> SessionRecord:
         return SessionRecord(
@@ -526,9 +644,20 @@ class SupabaseSessionStore:
 
     def _get(self, table: str, *, params: dict[str, str]) -> list[dict]:
         response = self._client.get(f"{self._base_url}/rest/v1/{table}", params=params)
-        response.raise_for_status()
+        self._raise_for_status(response, f"Supabase read failed for {table}")
         payload = response.json()
         return payload if isinstance(payload, list) else [payload]
+
+    def _get_with_variants(self, table: str, params_variants: list[dict[str, str]]) -> list[dict]:
+        errors: list[RuntimeError] = []
+        for params in params_variants:
+            try:
+                return self._get(table, params=params)
+            except RuntimeError as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[-1]
+        raise RuntimeError(f"Supabase read failed for {table}: no query variants provided")
 
     def _post(self, table: str, payload: dict) -> None:
         response = self._client.post(
@@ -536,7 +665,24 @@ class SupabaseSessionStore:
             content=json.dumps(payload),
             headers={"Prefer": "return=minimal"},
         )
-        response.raise_for_status()
+        self._raise_for_status(response, f"Supabase insert failed for {table}")
+
+    def _post_with_variants(self, table: str, payload_variants: list[dict]) -> None:
+        errors: list[RuntimeError] = []
+        seen_payloads: set[str] = set()
+        for payload in payload_variants:
+            signature = json.dumps(payload, sort_keys=True)
+            if signature in seen_payloads:
+                continue
+            seen_payloads.add(signature)
+            try:
+                self._post(table, payload)
+                return
+            except RuntimeError as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[-1]
+        raise RuntimeError(f"Supabase insert failed for {table}: no payload variants provided")
 
     def _patch(self, table: str, payload: dict, filters: dict[str, str]) -> None:
         response = self._client.patch(
@@ -545,4 +691,34 @@ class SupabaseSessionStore:
             content=json.dumps(payload),
             headers={"Prefer": "return=minimal"},
         )
-        response.raise_for_status()
+        self._raise_for_status(response, f"Supabase update failed for {table}")
+
+    def _patch_with_variants(self, table: str, payload_variants: list[dict], filters: dict[str, str]) -> None:
+        errors: list[RuntimeError] = []
+        seen_payloads: set[str] = set()
+        for payload in payload_variants:
+            signature = json.dumps(payload, sort_keys=True)
+            if signature in seen_payloads:
+                continue
+            seen_payloads.add(signature)
+            try:
+                self._patch(table, payload, filters)
+                return
+            except RuntimeError as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[-1]
+        raise RuntimeError(f"Supabase update failed for {table}: no payload variants provided")
+
+    def _raise_for_status(self, response: httpx.Response, context: str) -> None:
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = response.text
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict):
+                detail = payload.get("message") or payload.get("detail") or payload.get("error_description") or detail
+            raise RuntimeError(f"{context}: {detail}") from exc

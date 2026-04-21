@@ -85,7 +85,7 @@ class SessionManager:
         )
         self._store.append_latency_event(
             LatencyEventRecord(
-                id=f"lat_{uuid.uuid4().hex[:12]}",
+                id=str(uuid.uuid4()),
                 conversationId=session.conversationId,
                 sessionId=session.id,
                 stage="session_start",
@@ -243,11 +243,33 @@ class SessionManager:
 
     def get_events(self, session_id: str) -> LocalSessionEventsResponse:
         realtime = self._require_session(session_id)
-        return self._store.load_events(realtime.session.conversationId, realtime.session.id)
+        payload = self._store.load_events(realtime.session.conversationId, realtime.session.id)
+        return payload.model_copy(
+            update={
+                "session": payload.session.model_copy(
+                    update={
+                        "status": realtime.session.status,
+                        "startedAt": realtime.session.startedAt or payload.session.startedAt,
+                        "endedAt": realtime.session.endedAt or payload.session.endedAt,
+                    }
+                )
+            }
+        )
 
     def get_timeline(self, session_id: str) -> SessionTimelineResponse:
         realtime = self._require_session(session_id)
-        return build_session_timeline(self._store, realtime.session.conversationId, realtime.session.id)
+        payload = build_session_timeline(self._store, realtime.session.conversationId, realtime.session.id)
+        return payload.model_copy(
+            update={
+                "session": payload.session.model_copy(
+                    update={
+                        "status": realtime.session.status,
+                        "startedAt": realtime.session.startedAt or payload.session.startedAt,
+                        "endedAt": realtime.session.endedAt or payload.session.endedAt,
+                    }
+                )
+            }
+        )
 
     async def close(self) -> None:
         for session_id in list(self._sessions.keys()):

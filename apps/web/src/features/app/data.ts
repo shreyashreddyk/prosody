@@ -45,7 +45,6 @@ type SourceRow = {
   storage_bucket?: string | null;
   storage_path?: string | null;
   size_bytes?: number | null;
-  status?: string | null;
   processing_status?: string | null;
   error_message?: string | null;
   created_at?: string | null;
@@ -108,7 +107,7 @@ function mapSource(row: SourceRow): Source {
     storageBucket: row.storage_bucket ?? "conversation-sources",
     storagePath: row.storage_path ?? undefined,
     sizeBytes: row.size_bytes ?? undefined,
-    processingStatus: (row.processing_status ?? row.status ?? "pending") as Source["processingStatus"],
+    processingStatus: (row.processing_status ?? "pending") as Source["processingStatus"],
     errorMessage: row.error_message ?? undefined,
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined
@@ -303,6 +302,18 @@ export async function loadConversationWorkspace(conversationId: string): Promise
   };
 }
 
+const SOURCES_BUCKET = "conversation-sources";
+
+async function updateSourceStatus(
+  sourceId: string,
+  patch: { processing_status: Source["processingStatus"]; error_message: string | null }
+): Promise<void> {
+  const { error } = await supabase.from("sources").update(patch).eq("id", sourceId);
+  if (error) {
+    throw error;
+  }
+}
+
 export async function uploadSource(userId: string, conversationId: string, file: File): Promise<void> {
   const sourceId = crypto.randomUUID();
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
@@ -312,35 +323,34 @@ export async function uploadSource(userId: string, conversationId: string, file:
     id: sourceId,
     conversation_id: conversationId,
     owner_user_id: userId,
+    kind: "document",
     filename: file.name,
     mime_type: file.type || "application/octet-stream",
+    storage_bucket: SOURCES_BUCKET,
     storage_path: storagePath,
     size_bytes: file.size,
-    status: "pending"
+    processing_status: "pending",
+    error_message: null,
   });
 
   if (insertError) {
     throw insertError;
   }
 
-  const { error: uploadError } = await supabase.storage.from("conversation-sources").upload(storagePath, file, {
-    upsert: false
+  const { error: uploadError } = await supabase.storage.from(SOURCES_BUCKET).upload(storagePath, file, {
+    upsert: false,
   });
 
   if (uploadError) {
-    await supabase
-      .from("sources")
-      .update({ status: "failed", error_message: uploadError.message })
-      .eq("id", sourceId);
+    // Best-effort: mark the metadata row as failed. If this secondary update
+    // also errors we still surface the original upload error to the caller.
+    try {
+      await updateSourceStatus(sourceId, { processing_status: "failed", error_message: uploadError.message });
+    } catch {
+      // swallow — the upload error is the primary failure
+    }
     throw uploadError;
   }
 
-  const { error: updateError } = await supabase
-    .from("sources")
-    .update({ status: "ready", error_message: null })
-    .eq("id", sourceId);
-
-  if (updateError) {
-    throw updateError;
-  }
+  await updateSourceStatus(sourceId, { processing_status: "ready", error_message: null });
 }

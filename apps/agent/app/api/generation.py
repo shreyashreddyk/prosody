@@ -15,6 +15,7 @@ from app.models import (
     GenerateFlashcardsResponse,
     GenerateSummaryResponse,
 )
+from app.storage.sources import build_sources_context
 
 router = APIRouter()
 
@@ -46,7 +47,10 @@ Constraints:
 - If the transcript is thin or has few turns, acknowledge this briefly and focus on what is available.
 - Keep the total summary under 400 words.
 - Write in plain text with markdown formatting (headers, bullets, numbered lists).
-- Do not include raw timestamps or turn IDs."""
+- Do not include raw timestamps or turn IDs.
+
+Source grounding:
+If the user message includes an `## Attached sources` section, treat those documents (resume, job description, study notes, etc.) as ground-truth context about the client and ground your feedback in them where relevant. If no attached sources are present, rely on the transcript alone."""
 
 
 FLASHCARD_SYSTEM_PROMPT = """You are an expert educational assistant specializing in creating high-yield study materials from coaching and interview practice transcripts. Your goal is to convert session transcripts into effective, atomic flashcards designed for long-term retention using active recall.
@@ -74,7 +78,10 @@ Constraints:
 - If the user demonstrated a strength, create a flashcard that reinforces it.
 - If the user had a weakness, create a flashcard about the corrective approach.
 - Do not reference specific names, timestamps, or session metadata.
-- Do not include any explanatory text outside the JSON array."""
+- Do not include any explanatory text outside the JSON array.
+
+Source grounding:
+If the user message includes an `## Attached sources` section, use those documents (resume, job description, study notes, etc.) as additional context when choosing which concepts deserve flashcards, but never quote personal details like names or contact info."""
 
 
 # ── Helpers ──
@@ -171,8 +178,13 @@ async def generate_summary(
 
     transcript = _build_transcript_text(all_turns)
 
-    # Call OpenAI
-    user_message = f"Here is the full coaching transcript across {len(session_rows)} session(s):\n\n{transcript}"
+    sources_block = build_sources_context(store, conversation_id, user.id)
+    user_message_parts = [
+        f"Here is the full coaching transcript across {len(session_rows)} session(s):\n\n{transcript}"
+    ]
+    if sources_block:
+        user_message_parts.append(sources_block)
+    user_message = "\n\n".join(user_message_parts)
     summary_text = await _call_openai(
         api_key=settings.openai_api_key,
         model=settings.llm_model,
@@ -243,8 +255,11 @@ async def generate_flashcards(
 
     transcript = _build_transcript_text(turn_rows)
 
-    # Call OpenAI
-    user_message = f"Here is the coaching session transcript:\n\n{transcript}"
+    sources_block = build_sources_context(store, conversation_id, user.id)
+    user_message_parts = [f"Here is the coaching session transcript:\n\n{transcript}"]
+    if sources_block:
+        user_message_parts.append(sources_block)
+    user_message = "\n\n".join(user_message_parts)
     raw_response = await _call_openai(
         api_key=settings.openai_api_key,
         model=settings.llm_model,

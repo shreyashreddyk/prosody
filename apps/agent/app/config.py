@@ -9,6 +9,7 @@ from pathlib import Path
 class Settings:
     port: int
     data_dir: Path
+    web_allowed_origins: list[str]
     llm_provider: str
     llm_model: str
     llm_system_prompt: str
@@ -32,11 +33,18 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         ice_servers = os.getenv("SMALLWEBRTC_ICE_SERVERS", "stun:stun.l.google.com:19302")
+        web_allowed_origins = os.getenv(
+            "WEB_ALLOWED_ORIGINS",
+            "http://127.0.0.1:5173,http://localhost:5173",
+        )
         return cls(
             port=int(os.getenv("PORT", "8000")),
             data_dir=Path(os.getenv("PROSODY_DATA_DIR", ".prosody-data")).resolve(),
+            web_allowed_origins=[
+                item.strip() for item in web_allowed_origins.split(",") if item.strip()
+            ],
             llm_provider=os.getenv("LLM_PROVIDER", "openai").strip().lower(),
-            llm_model=os.getenv("LLM_MODEL", "gpt-4o-mini").strip(),
+            llm_model=os.getenv("LLM_MODEL", "gpt-5-nano").strip(),
             llm_system_prompt=os.getenv(
                 "LLM_SYSTEM_PROMPT",
                 (

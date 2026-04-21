@@ -14,7 +14,7 @@ export function Panel({
     <section
       className={`rounded-xl p-5 ${
         subtle
-          ? "bg-[rgba(255,255,255,0.025)] border border-[rgba(255,255,255,0.06)]"
+          ? "bg-[rgba(255,255,255,0.025)] border border-border-subtle"
           : "bg-bg-surface-1 border border-border-subtle shadow-[0_18px_60px_rgba(0,0,0,0.28)]"
       } ${className}`}
     >
