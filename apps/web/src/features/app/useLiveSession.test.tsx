@@ -7,11 +7,13 @@ const {
   disconnectMock,
   pipecatClientMock,
   smallWebRtcTransportMock,
+  wavMediaManagerMock,
 } = vi.hoisted(() => ({
   connectMock: vi.fn().mockResolvedValue(undefined),
   disconnectMock: vi.fn().mockResolvedValue(undefined),
   pipecatClientMock: vi.fn(),
   smallWebRtcTransportMock: vi.fn(),
+  wavMediaManagerMock: vi.fn(),
 }));
 
 pipecatClientMock.mockImplementation((options?: { callbacks?: Record<string, (...args: unknown[]) => void> }) => ({
@@ -20,6 +22,7 @@ pipecatClientMock.mockImplementation((options?: { callbacks?: Record<string, (..
   callbacks: options?.callbacks ?? {},
 }));
 smallWebRtcTransportMock.mockImplementation(() => ({}));
+wavMediaManagerMock.mockImplementation(() => ({ type: "wav-media-manager" }));
 
 vi.mock("@pipecat-ai/client-js", () => ({
   PipecatClient: pipecatClientMock,
@@ -27,6 +30,7 @@ vi.mock("@pipecat-ai/client-js", () => ({
 
 vi.mock("@pipecat-ai/small-webrtc-transport", () => ({
   SmallWebRTCTransport: smallWebRtcTransportMock,
+  WavMediaManager: wavMediaManagerMock,
 }));
 
 function jsonResponse(payload: unknown): Response {
@@ -109,6 +113,10 @@ describe("useLiveSession", () => {
     const connectArgs = connectMock.mock.calls[0][0] as {
       webrtcRequestParams: { endpoint: string; headers: Headers };
     };
+    expect(wavMediaManagerMock).toHaveBeenCalledWith(undefined, 16000);
+    expect(smallWebRtcTransportMock).toHaveBeenCalledWith({
+      mediaManager: { type: "wav-media-manager" },
+    });
     expect(connectArgs.webrtcRequestParams.endpoint).toBe(
       "http://127.0.0.1:8000/api/local/sessions/sess_1/offer"
     );
@@ -189,5 +197,76 @@ describe("useLiveSession", () => {
       )
     );
     expect(result.current.connectionState).toBe("failed");
+  });
+
+  it("does not surface a fatal startup error for generic track-stopped events", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/local/sessions")) {
+        return jsonResponse({
+          conversationId: "conv_1",
+          session: {
+            id: "sess_1",
+            conversationId: "conv_1",
+            transportKind: "smallwebrtc",
+            status: "connecting",
+            startedAt: "2026-04-20T22:00:00Z",
+            createdAt: "2026-04-20T22:00:00Z",
+            updatedAt: "2026-04-20T22:00:00Z",
+          },
+          offerEndpoint: "http://127.0.0.1:8000/api/local/sessions/sess_1/offer",
+        });
+      }
+      if (url.endsWith("/events")) {
+        return jsonResponse({
+          session: {
+            id: "sess_1",
+            conversationId: "conv_1",
+            transportKind: "smallwebrtc",
+            status: "connecting",
+          },
+          transcriptEvents: [],
+        });
+      }
+      if (url.endsWith("/timeline")) {
+        return jsonResponse({
+          session: {
+            id: "sess_1",
+            conversationId: "conv_1",
+            transportKind: "smallwebrtc",
+            status: "connecting",
+          },
+          turnTimings: [],
+          rollingMetrics: null,
+          degradationEvents: [],
+          replayArtifactStatus: { available: false },
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+
+    connectMock.mockImplementationOnce(async () => {
+      const callbacks = pipecatClientMock.mock.calls[0]?.[0]?.callbacks as
+        | { onTrackStopped?: (track: MediaStreamTrack) => void }
+        | undefined;
+      callbacks?.onTrackStopped?.({ kind: "audio", readyState: "ended" } as MediaStreamTrack);
+    });
+
+    const { result } = renderHook(() =>
+      useLiveSession({
+        accessToken: "token-123",
+        conversationId: "conv_1",
+        onSessionCreated: () => undefined,
+        onSessionEnded: () => undefined,
+      })
+    );
+
+    await act(async () => {
+      await result.current.startSession();
+    });
+
+    expect(result.current.errorMessage).toBeNull();
+    expect(result.current.connectionState).toBe("connecting");
   });
 });

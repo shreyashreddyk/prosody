@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { PipecatClient, type RTVIMessage, type TransportState } from "@pipecat-ai/client-js";
-import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
+import { SmallWebRTCTransport, WavMediaManager } from "@pipecat-ai/small-webrtc-transport";
 import type {
   DegradationEvent,
   RealtimeConnectionState,
@@ -61,6 +61,15 @@ function mergeTranscriptEvents(events: TranscriptEvent[]): TranscriptRow[] {
     });
   }
   return Array.from(rows.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+function debugTransport(event: string, details?: Record<string, unknown>) {
+  if (!import.meta.env.DEV) return;
+  if (details) {
+    console.debug(`[prosody-live] ${event}`, details);
+    return;
+  }
+  console.debug(`[prosody-live] ${event}`);
 }
 
 async function readResponseError(response: Response, fallback: string) {
@@ -163,18 +172,30 @@ export function useLiveSession({
 
   const connectClient = useCallback(async (offerEndpoint: string) => {
     const client = new PipecatClient({
-      transport: new SmallWebRTCTransport(),
+      transport: new SmallWebRTCTransport({
+        mediaManager: new WavMediaManager(undefined, 16000),
+      }),
       enableMic: true,
       enableCam: false,
       callbacks: {
-        onTransportStateChanged: (state) => setConnectionState(mapTransportState(state)),
-        onBotReady: () => setConnectionState("live"),
+        onTransportStateChanged: (state) => {
+          debugTransport("transport-state", { state });
+          setConnectionState(mapTransportState(state));
+        },
+        onBotReady: () => {
+          debugTransport("bot-ready");
+          setConnectionState("live");
+        },
         onMicUpdated: (mic) => {
           selectedMicLabelRef.current = mic.label || null;
+          debugTransport("mic-updated", { label: selectedMicLabelRef.current });
         },
         onLocalAudioLevel: (level) => {
           if (level > 0.02) {
             sawLocalAudioRef.current = true;
+          }
+          if (level > 0.02) {
+            debugTransport("local-audio-level", { level });
           }
         },
         onUserTranscript: (data) => {
@@ -219,14 +240,20 @@ export function useLiveSession({
         },
         onDeviceError: (error) => {
           const devices = error.devices?.join(", ");
+          debugTransport("device-error", { type: error.type, devices });
           setErrorMessage(
             `Device error${devices ? ` (${devices})` : ""}: ${error.type}. Check your browser and macOS microphone permissions.`
           );
         },
+        onTrackStarted: (track) => {
+          debugTransport("track-started", { kind: track.kind, readyState: track.readyState });
+        },
         onTrackStopped: (track) => {
-          if (track.kind === "audio" && connectionStateRef.current !== "ended") {
-            setErrorMessage("The microphone track stopped while the live session was starting.");
-          }
+          debugTransport("track-stopped", {
+            kind: track.kind,
+            readyState: track.readyState,
+            connectionState: connectionStateRef.current,
+          });
         },
       },
     });
