@@ -42,7 +42,8 @@ export type DegradationCode =
   | "asr_stall"
   | "llm_timeout"
   | "tts_timeout"
-  | "transport_disconnect";
+  | "transport_disconnect"
+  | "no_inbound_audio";
 
 export interface DegradationEvent {
   id: string;

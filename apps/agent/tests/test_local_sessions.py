@@ -51,6 +51,11 @@ def test_create_and_end_local_session_requires_auth_and_persists_events(tmp_path
       end_response = client.post(f"/api/local/sessions/{payload['session']['id']}/end")
       assert end_response.status_code == 200
       assert end_response.json()["status"] == "ended"
+      degradation_events = client.app.state.store.load_degradation_events(
+          payload["conversationId"],
+          payload["session"]["id"],
+      )
+      assert any(event.code == "no_inbound_audio" for event in degradation_events)
 
       client.app.dependency_overrides.clear()
 

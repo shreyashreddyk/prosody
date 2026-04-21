@@ -9,6 +9,9 @@ function jsonResponse(payload: unknown): Response {
   return {
     ok: true,
     status: 200,
+    clone() {
+      return jsonResponse(payload);
+    },
     json: async () => payload,
     text: async () => JSON.stringify(payload),
   } as Response;
@@ -26,6 +29,8 @@ describe("liveDiagnostics", () => {
     delete window.__prosodyLiveDiagnosticsActiveSessionId;
     delete window.__prosodyLiveDiagnosticsFetchInstalled;
     delete window.__prosodyLiveDiagnosticsPeerConnectionInstalled;
+    delete window.__prosodyLiveDiagnosticsPeerConnections;
+    delete window.__prosodyLiveDiagnosticsStatsIntervalId;
   });
 
   it("captures offer and ICE patch diagnostics without changing fetch behavior", async () => {
@@ -53,5 +58,36 @@ describe("liveDiagnostics", () => {
       ),
     ).toBe(true);
     expect(diagnostics.some((record) => record.event === "offer-patch-response" && record.sessionId === "sess_1")).toBe(true);
+  });
+
+  it("summarizes offer SDP media sections in diagnostics", async () => {
+    installLiveFetchDiagnostics();
+    setActiveLiveDiagnosticsSession("sess_2");
+
+    await window.fetch("http://127.0.0.1:8000/api/local/sessions/sess_2/offer", {
+      method: "POST",
+      body: JSON.stringify({
+        sdp: [
+          "v=0",
+          "m=audio 9 UDP/TLS/RTP/SAVPF 111",
+          "a=mid:0",
+          "a=sendrecv",
+          "a=rtpmap:111 opus/48000/2",
+          "m=video 9 UDP/TLS/RTP/SAVPF 96",
+          "a=mid:1",
+          "a=recvonly",
+        ].join("\r\n"),
+        type: "offer",
+      }),
+    });
+
+    const diagnostics = window.__prosodyLiveDiagnostics ?? [];
+    expect(
+      diagnostics.some(
+        (record) =>
+          record.event === "offer-request" &&
+          (record.details?.sdpSummary as { mediaCount?: number } | undefined)?.mediaCount === 2,
+      ),
+    ).toBe(true);
   });
 });

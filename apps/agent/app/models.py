@@ -180,7 +180,7 @@ class DegradationEventRecord(BaseModel):
     category: Literal["transport", "provider", "latency", "source_processing"]
     severity: Literal["info", "warning", "critical"]
     provider: Literal["asr", "llm", "tts", "transport"] | None = None
-    code: Literal["asr_stall", "llm_timeout", "tts_timeout", "transport_disconnect"]
+    code: Literal["asr_stall", "llm_timeout", "tts_timeout", "transport_disconnect", "no_inbound_audio"]
     message: str
     details: dict[str, str | int | float | bool | None] | None = None
     createdAt: str
@@ -293,4 +293,3 @@ class GenerateSummaryResponse(BaseModel):
 
 class GenerateFlashcardsResponse(BaseModel):
     flashcardSet: FlashcardSetRecord
-

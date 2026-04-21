@@ -95,6 +95,88 @@ def test_append_degradation_event_falls_back_to_canonical_columns_when_legacy_sh
     assert captured_payloads[0]["reason"] == "provider"
     assert captured_payloads[1]["category"] == "provider"
     assert captured_payloads[1]["created_at"] == event.createdAt
+    assert captured_payloads[1]["provider"] == "tts"
+
+
+def test_append_degradation_event_falls_back_when_provider_column_is_missing() -> None:
+    store = _build_store()
+    captured_payloads: list[dict] = []
+    store._session_owner_id = lambda _session_id: "user_test"
+
+    def fake_post(table: str, payload: dict) -> None:
+        assert table == "degradation_events"
+        captured_payloads.append(payload)
+        if "provider" in payload:
+            raise RuntimeError("Supabase insert failed for degradation_events: Could not find the 'provider' column")
+
+    store._post = fake_post
+
+    event = DegradationEventRecord(
+        id=str(uuid.uuid4()),
+        conversationId="conv_test",
+        sessionId="sess_test",
+        turnId="turn_test",
+        category="transport",
+        severity="warning",
+        provider="transport",
+        code="no_inbound_audio",
+        message="No inbound audio arrived",
+        details={"watchdogSeconds": 5},
+        createdAt="2026-04-21T15:05:00Z",
+    )
+
+    store.append_degradation_event(event)
+
+    assert "provider" in captured_payloads[0]
+    assert "provider" in captured_payloads[1]
+    providerless_payloads = [payload for payload in captured_payloads if "provider" not in payload]
+    assert providerless_payloads
+    assert providerless_payloads[0]["reason"] == "transport"
+
+
+def test_append_degradation_event_falls_back_to_legacy_minimal_shape() -> None:
+    store = _build_store()
+    captured_payloads: list[dict] = []
+    store._session_owner_id = lambda _session_id: "user_test"
+
+    def fake_post(table: str, payload: dict) -> None:
+        assert table == "degradation_events"
+        captured_payloads.append(payload)
+        disallowed_keys = {"turn_id", "provider", "code", "details", "category", "created_at", "recovered_at"}
+        present_disallowed = disallowed_keys.intersection(payload)
+        if present_disallowed:
+            missing_key = sorted(present_disallowed)[0]
+            raise RuntimeError(f"Supabase insert failed for degradation_events: Could not find the '{missing_key}' column")
+
+    store._post = fake_post
+
+    event = DegradationEventRecord(
+        id=str(uuid.uuid4()),
+        conversationId="conv_test",
+        sessionId="sess_test",
+        turnId=None,
+        category="transport",
+        severity="warning",
+        provider="transport",
+        code="no_inbound_audio",
+        message="No inbound audio arrived",
+        details={"watchdogSeconds": 5},
+        createdAt="2026-04-21T15:05:00Z",
+    )
+
+    store.append_degradation_event(event)
+
+    assert captured_payloads[-1] == {
+        "id": event.id,
+        "conversation_id": "conv_test",
+        "session_id": "sess_test",
+        "owner_user_id": "user_test",
+        "severity": "warning",
+        "message": "No inbound audio arrived",
+        "reason": "transport",
+        "timestamp": "2026-04-21T15:05:00Z",
+        "recovery": None,
+    }
 
 
 def test_recover_degradation_event_falls_back_to_canonical_column_when_legacy_shape_is_missing() -> None:

@@ -14,8 +14,12 @@ import type {
 import { getAgentBaseUrl } from "../../lib/supabase";
 import {
   appendLiveDiagnostic,
+  captureClientTrackDiagnostics,
   ensureLiveDiagnosticsInstalled,
+  snapshotPeerConnections,
+  startPeerConnectionStatsPolling,
   setActiveLiveDiagnosticsSession,
+  stopPeerConnectionStatsPolling,
 } from "./liveDiagnostics";
 
 /* ─── Types ─── */
@@ -199,6 +203,7 @@ export function useLiveSession({
 
   const connectClient = useCallback(async (sessionId: string, offerEndpoint: string) => {
     setActiveLiveDiagnosticsSession(sessionId);
+    stopPeerConnectionStatsPolling();
     appendLiveDiagnostic("transport-connect-start", {
       offerEndpoint,
     }, sessionId);
@@ -290,6 +295,7 @@ export function useLiveSession({
             devices,
             details: error.details,
           }, sessionId);
+          void snapshotPeerConnections("device-error", sessionId);
           setErrorMessage(
             `Device error${devices ? ` (${devices})` : ""}: ${error.type}. Check your browser and macOS microphone permissions.`
           );
@@ -317,8 +323,15 @@ export function useLiveSession({
           headers: new Headers({
             Authorization: `Bearer ${accessToken}`,
           }),
+          requestData: {
+            diagnosticsVersion: "2026-04-21",
+            userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
+          },
         },
       });
+      captureClientTrackDiagnostics(client.tracks(), sessionId);
+      void snapshotPeerConnections("post-connect", sessionId);
+      startPeerConnectionStatsPolling(sessionId);
       appendLiveDiagnostic("transport-connect-resolved", undefined, sessionId);
     } catch (error) {
       appendLiveDiagnostic("transport-connect-failed", {
@@ -358,6 +371,7 @@ export function useLiveSession({
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      stopPeerConnectionStatsPolling();
       if (clientRef.current) void clientRef.current.disconnect();
     };
   }, []);
@@ -383,6 +397,7 @@ export function useLiveSession({
     setConnectionState("reconnecting");
     appendLiveDiagnostic("session-resume-request", undefined, sessionId);
     try {
+      stopPeerConnectionStatsPolling();
       if (clientRef.current) {
         await clientRef.current.disconnect();
         clientRef.current = null;
@@ -401,6 +416,7 @@ export function useLiveSession({
       await fetchEvents(payload.session.id);
       await fetchTimeline(payload.session.id);
     } catch (error) {
+      stopPeerConnectionStatsPolling();
       appendLiveDiagnostic("session-resume-failed", {
         message: error instanceof Error ? error.message : "Unable to resume the live session",
       }, sessionId);
@@ -444,6 +460,7 @@ export function useLiveSession({
       await fetchEvents(payload.session.id);
       await fetchTimeline(payload.session.id);
     } catch (error) {
+      stopPeerConnectionStatsPolling();
       setConnectionState("failed");
       appendLiveDiagnostic("session-create-failed", {
         message: error instanceof Error ? error.message : "Unable to start live session",
@@ -461,6 +478,7 @@ export function useLiveSession({
         method: "POST",
         headers: { Authorization: `Bearer ${accessToken}` },
       });
+      stopPeerConnectionStatsPolling();
       if (clientRef.current) await clientRef.current.disconnect();
       setConnectionState("ended");
       await fetchEvents(session.id);
@@ -468,6 +486,7 @@ export function useLiveSession({
       appendLiveDiagnostic("session-end-response", undefined, session.id);
       onSessionEnded();
     } catch (error) {
+      stopPeerConnectionStatsPolling();
       appendLiveDiagnostic("session-end-failed", {
         message: error instanceof Error ? error.message : "Unable to end live session",
       }, session.id);

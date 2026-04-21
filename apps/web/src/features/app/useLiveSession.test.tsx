@@ -21,6 +21,20 @@ const {
 pipecatClientMock.mockImplementation((options?: { callbacks?: Record<string, (...args: unknown[]) => void> }) => ({
   connect: connectMock,
   disconnect: disconnectMock,
+  tracks: () => ({
+    local: {
+      audio: {
+        kind: "audio",
+        id: "local-audio-track",
+        label: "MacBook Pro Microphone",
+        enabled: true,
+        muted: false,
+        readyState: "live",
+        getSettings: () => ({ deviceId: "mic_1", sampleRate: 16000 }),
+        addEventListener: vi.fn(),
+      } as unknown as MediaStreamTrack,
+    },
+  }),
   callbacks: options?.callbacks ?? {},
 }));
 smallWebRtcTransportMock.mockImplementation(() => ({}));
@@ -61,6 +75,8 @@ describe("useLiveSession", () => {
     delete window.__prosodyLiveDiagnosticsActiveSessionId;
     delete window.__prosodyLiveDiagnosticsFetchInstalled;
     delete window.__prosodyLiveDiagnosticsPeerConnectionInstalled;
+    delete window.__prosodyLiveDiagnosticsPeerConnections;
+    delete window.__prosodyLiveDiagnosticsStatsIntervalId;
   });
 
   it("passes the bearer token to Pipecat WebRTC offer requests", async () => {
@@ -360,5 +376,6 @@ describe("useLiveSession", () => {
     expect(diagnostics.some((record) => record.event === "session-create-response" && record.sessionId === "sess_1")).toBe(true);
     expect(diagnostics.some((record) => record.event === "transport-state" && record.sessionId === "sess_1")).toBe(true);
     expect(diagnostics.some((record) => record.event === "mic-updated" && record.sessionId === "sess_1")).toBe(true);
+    expect(diagnostics.some((record) => record.event === "local-audio-track-snapshot" && record.sessionId === "sess_1")).toBe(true);
   });
 });

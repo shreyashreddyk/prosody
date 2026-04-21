@@ -4,6 +4,7 @@ import json
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
+from itertools import combinations
 
 import httpx
 
@@ -562,27 +563,41 @@ class SupabaseSessionStore:
             "conversation_id": event.conversationId,
             "session_id": event.sessionId,
             "owner_user_id": owner_user_id,
-            "turn_id": event.turnId,
             "severity": event.severity,
+            "message": event.message,
+        }
+        optional_payload = {
+            "turn_id": event.turnId,
             "provider": event.provider,
             "code": event.code,
-            "message": event.message,
             "details": event.details or {},
         }
-        return [
-            {
-                **base_payload,
-                "reason": event.category,
-                "timestamp": event.createdAt,
-                "recovery": event.recoveredAt,
-            },
-            {
-                **base_payload,
-                "category": event.category,
-                "created_at": event.createdAt,
-                "recovered_at": event.recoveredAt,
-            },
-        ]
+        present_optional_items = [(key, value) for key, value in optional_payload.items() if value is not None]
+        payloads: list[dict] = []
+
+        for keep_count in range(len(present_optional_items), -1, -1):
+            for kept_items in combinations(present_optional_items, keep_count):
+                payload_variant = {
+                    **base_payload,
+                    **dict(kept_items),
+                }
+                payloads.extend(
+                    [
+                        {
+                            **payload_variant,
+                            "reason": event.category,
+                            "timestamp": event.createdAt,
+                            "recovery": event.recoveredAt,
+                        },
+                        {
+                            **payload_variant,
+                            "category": event.category,
+                            "created_at": event.createdAt,
+                            "recovered_at": event.recoveredAt,
+                        },
+                    ]
+                )
+        return payloads
 
     def _legacy_persisted_session_status(self, status: str) -> str:
         return {

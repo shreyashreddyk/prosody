@@ -32,6 +32,7 @@ from app.resilience import SessionResilienceCoordinator
 from app.storage.base import SessionStore
 from app.storage.local_store import iso_now
 from app.transports.local_webrtc import build_smallwebrtc_transport
+from app.webrtc_diagnostics import summarize_connection_state
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class SessionObserver(BaseObserver):
         conversation_id: str,
         session_id: str,
         resilience: SessionResilienceCoordinator,
+        on_first_user_audio=None,
     ):
         super().__init__()
         self._store = store
@@ -57,6 +59,8 @@ class SessionObserver(BaseObserver):
         self._assistant_transcript_persisted = False
         self._suppress_until_next_user_audio = False
         self._logged_turn_stages: set[tuple[str, str]] = set()
+        self._on_first_user_audio = on_first_user_audio
+        self._first_user_audio_seen = False
 
     async def on_push_frame(self, data: FramePushed):
         frame = data.frame
@@ -91,6 +95,9 @@ class SessionObserver(BaseObserver):
             turn_id = self._ensure_turn()
             self._latency.record_stage("first_user_audio", turn_id=turn_id)
             self._resilience.on_first_user_audio(turn_id)
+            if not self._first_user_audio_seen and self._on_first_user_audio:
+                self._first_user_audio_seen = True
+                self._on_first_user_audio()
             self._log_turn_stage_once(turn_id, "first_user_audio", "First user audio frame received")
             return
 
@@ -276,6 +283,7 @@ def build_session_task(
     resilience: SessionResilienceCoordinator,
     on_transport_connected=None,
     on_transport_disconnected=None,
+    on_first_user_audio=None,
 ):
     latency = LatencyRecorder(store, conversation_id, session_id)
     if session_started_at:
@@ -292,6 +300,7 @@ def build_session_task(
         conversation_id=conversation_id,
         session_id=session_id,
         resilience=resilience,
+        on_first_user_audio=on_first_user_audio,
     )
 
     @transport.event_handler("on_client_connected")
@@ -304,6 +313,14 @@ def build_session_task(
             conversation_id=conversation_id,
         )
         await transport.capture_participant_audio()
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "smallwebrtc-audio-capture-requested",
+            session_id=session_id,
+            conversation_id=conversation_id,
+            connection_state=summarize_connection_state(webrtc_connection),
+        )
         store.append_session_event(
             SessionEventRecord(
                 id=f"evt_{uuid.uuid4().hex[:12]}",

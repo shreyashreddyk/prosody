@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ from app.replay.service import build_session_timeline, generate_replay_artifact
 from app.logging_utils import log_diagnostic
 from app.storage.base import SessionStore
 from app.storage.local_store import iso_now
+from app.webrtc_diagnostics import summarize_connection_state, summarize_sdp
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,9 @@ class RealtimeSession:
     runner_task: asyncio.Task | None = None
     observer: Any = None
     resilience: SessionResilienceCoordinator | None = None
+    inbound_audio_detected: bool = False
+    inbound_audio_watchdog_task: asyncio.Task | None = None
+    inbound_audio_degradation_recorded: bool = False
 
 
 class SessionManager:
@@ -136,10 +141,93 @@ class SessionManager:
             conversation_id=realtime.session.conversationId,
             restart_pc=request.restart_pc,
             has_request_data=request.requestData is not None,
+            request_data_keys=sorted(request.requestData.keys()) if isinstance(request.requestData, dict) else None,
+            offer_sdp_summary=summarize_sdp(request.sdp),
         )
         payload = SmallWebRTCRequest.from_dict(request.model_dump(exclude_none=True))
 
         async def create_pipeline(webrtc_connection) -> None:
+            log_diagnostic(
+                logger,
+                logging.INFO,
+                "smallwebrtc-connection-created",
+                session_id=realtime.session.id,
+                conversation_id=realtime.session.conversationId,
+                connection_state=summarize_connection_state(webrtc_connection),
+            )
+
+            @webrtc_connection.event_handler("track-started")
+            async def handle_track_started(track):
+                log_diagnostic(
+                    logger,
+                    logging.INFO,
+                    "smallwebrtc-track-started",
+                    session_id=realtime.session.id,
+                    conversation_id=realtime.session.conversationId,
+                    track_kind=getattr(track, "kind", None),
+                    track_id=getattr(track, "id", None),
+                    track_ready_state=getattr(track, "readyState", None),
+                    connection_state=summarize_connection_state(webrtc_connection),
+                )
+
+            @webrtc_connection.event_handler("track-ended")
+            async def handle_track_ended(track):
+                log_diagnostic(
+                    logger,
+                    logging.WARNING,
+                    "smallwebrtc-track-ended",
+                    session_id=realtime.session.id,
+                    conversation_id=realtime.session.conversationId,
+                    track_kind=getattr(track, "kind", None),
+                    track_id=getattr(track, "id", None),
+                    track_ready_state=getattr(track, "readyState", None),
+                    connection_state=summarize_connection_state(webrtc_connection),
+                )
+
+            @webrtc_connection.event_handler("connecting")
+            async def handle_connecting():
+                log_diagnostic(
+                    logger,
+                    logging.INFO,
+                    "smallwebrtc-peer-connecting",
+                    session_id=realtime.session.id,
+                    conversation_id=realtime.session.conversationId,
+                    connection_state=summarize_connection_state(webrtc_connection),
+                )
+
+            @webrtc_connection.event_handler("connected")
+            async def handle_connected():
+                log_diagnostic(
+                    logger,
+                    logging.INFO,
+                    "smallwebrtc-peer-connected",
+                    session_id=realtime.session.id,
+                    conversation_id=realtime.session.conversationId,
+                    connection_state=summarize_connection_state(webrtc_connection),
+                )
+
+            @webrtc_connection.event_handler("failed")
+            async def handle_failed():
+                log_diagnostic(
+                    logger,
+                    logging.ERROR,
+                    "smallwebrtc-peer-failed",
+                    session_id=realtime.session.id,
+                    conversation_id=realtime.session.conversationId,
+                    connection_state=summarize_connection_state(webrtc_connection),
+                )
+
+            @webrtc_connection.event_handler("closed")
+            async def handle_closed():
+                log_diagnostic(
+                    logger,
+                    logging.WARNING,
+                    "smallwebrtc-peer-closed",
+                    session_id=realtime.session.id,
+                    conversation_id=realtime.session.conversationId,
+                    connection_state=summarize_connection_state(webrtc_connection),
+                )
+
             if realtime.resilience is None:
                 realtime.resilience = SessionResilienceCoordinator(
                     policy=self._policy,
@@ -161,6 +249,7 @@ class SessionManager:
                 resilience=realtime.resilience,
                 on_transport_connected=lambda: self._on_transport_connected(realtime),
                 on_transport_disconnected=lambda: self._on_transport_disconnected(realtime),
+                on_first_user_audio=lambda: self._on_first_user_audio(realtime, webrtc_connection),
             )
             realtime.task = task
             realtime.runner = runner
@@ -174,6 +263,7 @@ class SessionManager:
 
             @task.event_handler("on_pipeline_finished")
             async def on_pipeline_finished(_task, _frame):
+                self._cancel_inbound_audio_watchdog(realtime)
                 if realtime.observer:
                     realtime.observer.flush_active_turn(status="partial")
                 if realtime.session.status == "reconnecting":
@@ -195,6 +285,7 @@ class SessionManager:
 
             @task.event_handler("on_pipeline_error")
             async def on_pipeline_error(_task, frame):
+                self._cancel_inbound_audio_watchdog(realtime)
                 if realtime.observer:
                     realtime.observer.flush_active_turn(status="failed")
                 if realtime.session.status == "reconnecting":
@@ -241,6 +332,7 @@ class SessionManager:
             conversation_id=realtime.session.conversationId,
             status=realtime.session.status,
             pc_id=answer.get("pc_id"),
+            answer_sdp_summary=summarize_sdp(answer.get("sdp")),
         )
         return SmallWebRTCOfferResponse.model_validate(answer)
 
@@ -275,6 +367,7 @@ class SessionManager:
 
     async def end_session(self, session_id: str) -> SessionRecord:
         realtime = self._require_session(session_id)
+        self._cancel_inbound_audio_watchdog(realtime)
         if realtime.observer:
             realtime.observer.flush_active_turn(status="partial")
         if realtime.task:
@@ -345,6 +438,7 @@ class SessionManager:
     async def close(self) -> None:
         for session_id in list(self._sessions.keys()):
             realtime = self._sessions[session_id]
+            self._cancel_inbound_audio_watchdog(realtime)
             try:
                 await realtime.request_handler.close()
             except Exception:
@@ -399,6 +493,7 @@ class SessionManager:
             )
         realtime.session.status = "live"
         self._store.save_session(realtime.session)
+        self._start_inbound_audio_watchdog(realtime)
         log_diagnostic(
             logger,
             logging.INFO,
@@ -409,6 +504,7 @@ class SessionManager:
         )
 
     async def _on_transport_disconnected(self, realtime: RealtimeSession) -> None:
+        self._cancel_inbound_audio_watchdog(realtime)
         log_diagnostic(
             logger,
             logging.WARNING,
@@ -461,6 +557,7 @@ class SessionManager:
         )
 
     async def _expire_reconnect(self, realtime: RealtimeSession) -> None:
+        self._cancel_inbound_audio_watchdog(realtime)
         if realtime.observer:
             realtime.observer.flush_active_turn(status="failed")
         realtime.session.status = "failed"
@@ -514,6 +611,18 @@ class SessionManager:
             degradation_event_count=len(self._store.load_degradation_events(session.conversationId, session.id)),
         )
         if no_inbound_audio:
+            realtime = self._sessions.get(session.id)
+            if realtime and not realtime.inbound_audio_degradation_recorded:
+                self._store.append_degradation_event(
+                    self._build_no_inbound_audio_event(
+                        session,
+                        details={
+                            "outcome": outcome,
+                            "durationMs": duration_ms,
+                        },
+                    )
+                )
+                realtime.inbound_audio_degradation_recorded = True
             log_diagnostic(
                 logger,
                 logging.WARNING,
@@ -523,3 +632,78 @@ class SessionManager:
                 outcome=outcome,
                 duration_ms=duration_ms,
             )
+
+    def _start_inbound_audio_watchdog(self, realtime: RealtimeSession) -> None:
+        if realtime.inbound_audio_detected:
+            return
+        self._cancel_inbound_audio_watchdog(realtime)
+        timeout_secs = max(5.0, self._settings.asr_stall_timeout_secs)
+
+        async def watchdog() -> None:
+            try:
+                await asyncio.sleep(timeout_secs)
+                if realtime.inbound_audio_detected or realtime.inbound_audio_degradation_recorded:
+                    return
+                connection = next(iter(realtime.request_handler._pcs_map.values()), None)
+                details = {
+                    "timeoutSeconds": timeout_secs,
+                    "sessionStatus": realtime.session.status,
+                }
+                if connection:
+                    details["connectionState"] = json.dumps(summarize_connection_state(connection), sort_keys=True)
+                self._store.append_degradation_event(
+                    self._build_no_inbound_audio_event(realtime.session, details=details)
+                )
+                realtime.inbound_audio_degradation_recorded = True
+                log_diagnostic(
+                    logger,
+                    logging.WARNING,
+                    "no-inbound-audio-watchdog-fired",
+                    session_id=realtime.session.id,
+                    conversation_id=realtime.session.conversationId,
+                    timeout_secs=timeout_secs,
+                    session_status=realtime.session.status,
+                    connection_state=details.get("connectionState"),
+                )
+            except asyncio.CancelledError:
+                return
+
+        realtime.inbound_audio_watchdog_task = asyncio.create_task(watchdog())
+
+    def _cancel_inbound_audio_watchdog(self, realtime: RealtimeSession) -> None:
+        if realtime.inbound_audio_watchdog_task and not realtime.inbound_audio_watchdog_task.done():
+            realtime.inbound_audio_watchdog_task.cancel()
+        realtime.inbound_audio_watchdog_task = None
+
+    def _on_first_user_audio(self, realtime: RealtimeSession, connection) -> None:
+        realtime.inbound_audio_detected = True
+        self._cancel_inbound_audio_watchdog(realtime)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "inbound-audio-confirmed",
+            session_id=realtime.session.id,
+            conversation_id=realtime.session.conversationId,
+            connection_state=summarize_connection_state(connection),
+        )
+
+    def _build_no_inbound_audio_event(
+        self,
+        session: SessionRecord,
+        *,
+        details: dict[str, Any] | None = None,
+    ):
+        from app.models import DegradationEventRecord
+
+        return DegradationEventRecord(
+            id=str(uuid.uuid4()),
+            conversationId=session.conversationId,
+            sessionId=session.id,
+            category="transport",
+            severity="warning",
+            provider="transport",
+            code="no_inbound_audio",
+            message="WebRTC connected but no inbound audio frames reached the backend.",
+            details=details or {},
+            createdAt=iso_now(),
+        )
