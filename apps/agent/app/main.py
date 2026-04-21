@@ -9,6 +9,7 @@ from app.auth import SupabaseAuthenticator
 from app.api.routes import router as api_router
 from app.api.generation import router as generation_router
 from app.config import Settings
+from app.logging_utils import configure_logging
 from app.sessions.manager import SessionManager
 from app.storage.local_store import LocalSessionStore
 from app.storage.supabase_store import SupabaseSessionStore
@@ -17,6 +18,7 @@ from app.storage.supabase_store import SupabaseSessionStore
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = Settings.from_env()
+    configure_logging(settings.agent_log_level)
     if settings.supabase_url and settings.supabase_service_role_key:
         store = SupabaseSessionStore(settings)
         app.state.authenticator = SupabaseAuthenticator(settings)

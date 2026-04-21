@@ -1,4 +1,5 @@
 import os
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -18,9 +19,11 @@ from app.models import (
     SmallWebRTCPatchRequestModel,
     SupabaseState,
 )
+from app.logging_utils import log_diagnostic
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _is_configured(env_var: str) -> bool:
@@ -94,12 +97,47 @@ def create_local_session(
     if not payload.conversation_id:
         raise HTTPException(status_code=400, detail="conversation_id is required")
     base_url = str(request.base_url).rstrip("/")
+    log_diagnostic(
+        logger,
+        logging.INFO,
+        "local-session-create-request",
+        conversation_id=payload.conversation_id,
+        user_id=user.id,
+        path=request.url.path,
+    )
     try:
         _store(request).ensure_conversation_owner(payload.conversation_id, user.id)
-        return _manager(request).create_session(base_url, conversation_id=payload.conversation_id, user=user)
+        response = _manager(request).create_session(base_url, conversation_id=payload.conversation_id, user=user)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "local-session-create-response",
+            conversation_id=response.conversationId,
+            session_id=response.session.id,
+            status=response.session.status,
+            user_id=user.id,
+        )
+        return response
     except KeyError as exc:
+        log_diagnostic(
+            logger,
+            logging.WARNING,
+            "local-session-create-not-found",
+            conversation_id=payload.conversation_id,
+            user_id=user.id,
+            error=str(exc),
+        )
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
+        log_diagnostic(
+            logger,
+            logging.ERROR,
+            "local-session-create-failed",
+            conversation_id=payload.conversation_id,
+            user_id=user.id,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -110,14 +148,59 @@ async def create_offer(
     request: Request,
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> SmallWebRTCOfferResponse:
+    log_diagnostic(
+        logger,
+        logging.INFO,
+        "local-session-offer-request",
+        session_id=session_id,
+        user_id=user.id,
+        path=request.url.path,
+        restart_pc=payload.restart_pc,
+        has_request_data=payload.requestData is not None,
+    )
     try:
         _store(request).ensure_session_owner(session_id, user.id)
-        return await _manager(request).handle_offer(session_id, payload)
+        response = await _manager(request).handle_offer(session_id, payload)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "local-session-offer-response",
+            session_id=session_id,
+            user_id=user.id,
+            pc_id=response.pc_id,
+            type=response.type,
+        )
+        return response
     except KeyError as exc:
+        log_diagnostic(
+            logger,
+            logging.WARNING,
+            "local-session-offer-not-found",
+            session_id=session_id,
+            user_id=user.id,
+            error=str(exc),
+        )
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
+        log_diagnostic(
+            logger,
+            logging.WARNING,
+            "local-session-offer-invalid",
+            session_id=session_id,
+            user_id=user.id,
+            error=str(exc),
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        log_diagnostic(
+            logger,
+            logging.ERROR,
+            "local-session-offer-failed",
+            session_id=session_id,
+            user_id=user.id,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -146,12 +229,48 @@ async def patch_offer(
     request: Request,
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> None:
+    log_diagnostic(
+        logger,
+        logging.INFO,
+        "local-session-offer-patch-request",
+        session_id=session_id,
+        user_id=user.id,
+        path=request.url.path,
+        candidate_count=len(payload.candidates),
+        pc_id=payload.pc_id,
+    )
     try:
         _store(request).ensure_session_owner(session_id, user.id)
         await _manager(request).handle_patch(session_id, payload)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "local-session-offer-patch-response",
+            session_id=session_id,
+            user_id=user.id,
+            candidate_count=len(payload.candidates),
+            pc_id=payload.pc_id,
+        )
     except KeyError as exc:
+        log_diagnostic(
+            logger,
+            logging.WARNING,
+            "local-session-offer-patch-not-found",
+            session_id=session_id,
+            user_id=user.id,
+            error=str(exc),
+        )
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
+        log_diagnostic(
+            logger,
+            logging.ERROR,
+            "local-session-offer-patch-failed",
+            session_id=session_id,
+            user_id=user.id,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -161,12 +280,47 @@ async def end_local_session(
     request: Request,
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> SessionRecord:
+    log_diagnostic(
+        logger,
+        logging.INFO,
+        "local-session-end-request",
+        session_id=session_id,
+        user_id=user.id,
+        path=request.url.path,
+    )
     try:
         _store(request).ensure_session_owner(session_id, user.id)
-        return await _manager(request).end_session(session_id)
+        response = await _manager(request).end_session(session_id)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "local-session-end-response",
+            session_id=session_id,
+            user_id=user.id,
+            status=response.status,
+            ended_at=response.endedAt,
+        )
+        return response
     except KeyError as exc:
+        log_diagnostic(
+            logger,
+            logging.WARNING,
+            "local-session-end-not-found",
+            session_id=session_id,
+            user_id=user.id,
+            error=str(exc),
+        )
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
+        log_diagnostic(
+            logger,
+            logging.ERROR,
+            "local-session-end-failed",
+            session_id=session_id,
+            user_id=user.id,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

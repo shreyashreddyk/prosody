@@ -5,12 +5,14 @@ import { useLiveSession } from "./LiveSessionPanel";
 const {
   connectMock,
   disconnectMock,
+  loggerSetLevelMock,
   pipecatClientMock,
   smallWebRtcTransportMock,
   wavMediaManagerMock,
 } = vi.hoisted(() => ({
   connectMock: vi.fn().mockResolvedValue(undefined),
   disconnectMock: vi.fn().mockResolvedValue(undefined),
+  loggerSetLevelMock: vi.fn(),
   pipecatClientMock: vi.fn(),
   smallWebRtcTransportMock: vi.fn(),
   wavMediaManagerMock: vi.fn(),
@@ -26,6 +28,12 @@ wavMediaManagerMock.mockImplementation(() => ({ type: "wav-media-manager" }));
 
 vi.mock("@pipecat-ai/client-js", () => ({
   PipecatClient: pipecatClientMock,
+  LogLevel: {
+    DEBUG: 4,
+  },
+  logger: {
+    setLevel: loggerSetLevelMock,
+  },
 }));
 
 vi.mock("@pipecat-ai/small-webrtc-transport", () => ({
@@ -49,6 +57,10 @@ describe("useLiveSession", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    delete window.__prosodyLiveDiagnostics;
+    delete window.__prosodyLiveDiagnosticsActiveSessionId;
+    delete window.__prosodyLiveDiagnosticsFetchInstalled;
+    delete window.__prosodyLiveDiagnosticsPeerConnectionInstalled;
   });
 
   it("passes the bearer token to Pipecat WebRTC offer requests", async () => {
@@ -121,6 +133,7 @@ describe("useLiveSession", () => {
       "http://127.0.0.1:8000/api/local/sessions/sess_1/offer"
     );
     expect(connectArgs.webrtcRequestParams.headers.get("Authorization")).toBe("Bearer token-123");
+    expect(loggerSetLevelMock).toHaveBeenCalledWith(4);
   });
 
   it("surfaces a no-audio diagnostic when the session ends without backend turns", async () => {
@@ -268,5 +281,84 @@ describe("useLiveSession", () => {
 
     expect(result.current.errorMessage).toBeNull();
     expect(result.current.connectionState).toBe("connecting");
+  });
+
+  it("stores structured diagnostics records for the active session in dev mode", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          conversationId: "conv_1",
+          session: {
+            id: "sess_1",
+            conversationId: "conv_1",
+            transportKind: "smallwebrtc",
+            status: "connecting",
+            startedAt: "2026-04-20T22:00:00Z",
+            createdAt: "2026-04-20T22:00:00Z",
+            updatedAt: "2026-04-20T22:00:00Z",
+          },
+          offerEndpoint: "http://127.0.0.1:8000/api/local/sessions/sess_1/offer",
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          session: {
+            id: "sess_1",
+            conversationId: "conv_1",
+            transportKind: "smallwebrtc",
+            status: "connecting",
+          },
+          transcriptEvents: [],
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          session: {
+            id: "sess_1",
+            conversationId: "conv_1",
+            transportKind: "smallwebrtc",
+            status: "connecting",
+          },
+          turnTimings: [],
+          rollingMetrics: null,
+          degradationEvents: [],
+          replayArtifactStatus: { available: false },
+        })
+      );
+
+    connectMock.mockImplementationOnce(async () => {
+      const callbacks = pipecatClientMock.mock.calls[0]?.[0]?.callbacks as
+        | {
+            onTransportStateChanged?: (state: string) => void;
+            onMicUpdated?: (mic: MediaDeviceInfo) => void;
+          }
+        | undefined;
+      callbacks?.onTransportStateChanged?.("connected");
+      callbacks?.onMicUpdated?.({
+        deviceId: "mic_1",
+        kind: "audioinput",
+        label: "MacBook Pro Microphone",
+      } as MediaDeviceInfo);
+    });
+
+    const { result } = renderHook(() =>
+      useLiveSession({
+        accessToken: "token-123",
+        conversationId: "conv_1",
+        onSessionCreated: () => undefined,
+        onSessionEnded: () => undefined,
+      })
+    );
+
+    await act(async () => {
+      await result.current.startSession();
+    });
+
+    const diagnostics = window.__prosodyLiveDiagnostics ?? [];
+    expect(diagnostics.some((record) => record.event === "session-create-request")).toBe(true);
+    expect(diagnostics.some((record) => record.event === "session-create-response" && record.sessionId === "sess_1")).toBe(true);
+    expect(diagnostics.some((record) => record.event === "transport-state" && record.sessionId === "sess_1")).toBe(true);
+    expect(diagnostics.some((record) => record.event === "mic-updated" && record.sessionId === "sess_1")).toBe(true);
   });
 });

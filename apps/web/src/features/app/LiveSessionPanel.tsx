@@ -12,6 +12,11 @@ import type {
   ReplayArtifactStatus,
 } from "@prosody/contracts";
 import { getAgentBaseUrl } from "../../lib/supabase";
+import {
+  appendLiveDiagnostic,
+  ensureLiveDiagnosticsInstalled,
+  setActiveLiveDiagnosticsSession,
+} from "./liveDiagnostics";
 
 /* ─── Types ─── */
 
@@ -61,15 +66,6 @@ function mergeTranscriptEvents(events: TranscriptEvent[]): TranscriptRow[] {
     });
   }
   return Array.from(rows.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-}
-
-function debugTransport(event: string, details?: Record<string, unknown>) {
-  if (!import.meta.env.DEV) return;
-  if (details) {
-    console.debug(`[prosody-live] ${event}`, details);
-    return;
-  }
-  console.debug(`[prosody-live] ${event}`);
 }
 
 async function readResponseError(response: Response, fallback: string) {
@@ -122,6 +118,17 @@ export function useLiveSession({
     connectionStateRef.current = connectionState;
   }, [connectionState]);
 
+  useEffect(() => {
+    ensureLiveDiagnosticsInstalled();
+  }, []);
+
+  useEffect(() => {
+    setActiveLiveDiagnosticsSession(activeSessionId ?? null);
+    return () => {
+      setActiveLiveDiagnosticsSession(null);
+    };
+  }, [activeSessionId]);
+
   const upsertRow = useCallback((row: TranscriptRow) => {
     setTranscriptRows((current) => {
       const next = new Map(current.map((item) => [item.id, item]));
@@ -131,22 +138,37 @@ export function useLiveSession({
   }, []);
 
   const fetchEvents = useCallback(async (sessionId: string) => {
+    appendLiveDiagnostic("session-events-request", {
+      path: `/api/local/sessions/${sessionId}/events`,
+    }, sessionId);
     const response = await fetch(`${getAgentBaseUrl()}/api/local/sessions/${sessionId}/events`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!response.ok) throw new Error(await readResponseError(response, "Unable to load session history"));
     const payload = (await response.json()) as LocalSessionEventsResponse;
+    appendLiveDiagnostic("session-events-response", {
+      status: payload.session.status,
+      transcriptEventCount: payload.transcriptEvents.length,
+    }, sessionId);
     setSession(payload.session);
     if (payload.session.status === "reconnecting") setConnectionState("reconnecting");
     setTranscriptRows(mergeTranscriptEvents(payload.transcriptEvents));
   }, [accessToken]);
 
   const fetchTimeline = useCallback(async (sessionId: string) => {
+    appendLiveDiagnostic("session-timeline-request", {
+      path: `/api/local/sessions/${sessionId}/timeline`,
+    }, sessionId);
     const response = await fetch(`${getAgentBaseUrl()}/api/local/sessions/${sessionId}/timeline`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!response.ok) throw new Error(await readResponseError(response, "Unable to load metrics"));
     const payload = (await response.json()) as SessionTimelineResponse;
+    appendLiveDiagnostic("session-timeline-response", {
+      status: payload.session.status,
+      turnTimingCount: payload.turnTimings.length,
+      degradationEventCount: payload.degradationEvents.length,
+    }, sessionId);
     setSession(payload.session);
     setTurnTimings(payload.turnTimings);
     setRollingMetrics(payload.rollingMetrics);
@@ -162,6 +184,11 @@ export function useLiveSession({
     ) {
       awaitingFirstTurnRef.current = false;
       setConnectionState("failed");
+      appendLiveDiagnostic("session-ended-without-backend-audio", {
+        sawLocalAudio: sawLocalAudioRef.current,
+        selectedMicLabel: selectedMicLabelRef.current,
+        sessionStatus: payload.session.status,
+      }, sessionId);
       setErrorMessage(
         sawLocalAudioRef.current
           ? "Microphone audio was detected in the browser but never reached the backend. This looks like a local WebRTC media transport issue."
@@ -170,7 +197,11 @@ export function useLiveSession({
     }
   }, [accessToken]);
 
-  const connectClient = useCallback(async (offerEndpoint: string) => {
+  const connectClient = useCallback(async (sessionId: string, offerEndpoint: string) => {
+    setActiveLiveDiagnosticsSession(sessionId);
+    appendLiveDiagnostic("transport-connect-start", {
+      offerEndpoint,
+    }, sessionId);
     const client = new PipecatClient({
       transport: new SmallWebRTCTransport({
         mediaManager: new WavMediaManager(undefined, 16000),
@@ -179,27 +210,33 @@ export function useLiveSession({
       enableCam: false,
       callbacks: {
         onTransportStateChanged: (state) => {
-          debugTransport("transport-state", { state });
+          appendLiveDiagnostic("transport-state", { state }, sessionId);
           setConnectionState(mapTransportState(state));
         },
         onBotReady: () => {
-          debugTransport("bot-ready");
+          appendLiveDiagnostic("bot-ready", undefined, sessionId);
           setConnectionState("live");
         },
         onMicUpdated: (mic) => {
           selectedMicLabelRef.current = mic.label || null;
-          debugTransport("mic-updated", { label: selectedMicLabelRef.current });
+          appendLiveDiagnostic("mic-updated", {
+            label: selectedMicLabelRef.current,
+            deviceId: mic.deviceId || null,
+            kind: mic.kind,
+          }, sessionId);
         },
         onLocalAudioLevel: (level) => {
-          if (level > 0.02) {
+          if (level > 0.02 && !sawLocalAudioRef.current) {
             sawLocalAudioRef.current = true;
-          }
-          if (level > 0.02) {
-            debugTransport("local-audio-level", { level });
+            appendLiveDiagnostic("local-audio-detected", { level }, sessionId);
           }
         },
         onUserTranscript: (data) => {
           awaitingFirstTurnRef.current = false;
+          appendLiveDiagnostic("user-transcript", {
+            final: data.final,
+            textLength: data.text.length,
+          }, sessionId);
           upsertRow({
             id: `live:user:${data.timestamp}`,
             turnId: `live:user:${data.timestamp}`,
@@ -211,6 +248,7 @@ export function useLiveSession({
           });
         },
         onBotLlmStarted: () => {
+          appendLiveDiagnostic("bot-llm-started", undefined, sessionId);
           upsertRow({
             id: "assistant-live",
             turnId: session?.id ?? "assistant-live",
@@ -222,6 +260,9 @@ export function useLiveSession({
           });
         },
         onBotLlmText: (data) => {
+          appendLiveDiagnostic("bot-llm-text", {
+            textLength: data.text.length,
+          }, sessionId);
           setTranscriptRows((current) =>
             current.map((row) =>
               row.id === "assistant-live"
@@ -231,41 +272,60 @@ export function useLiveSession({
           );
         },
         onBotLlmStopped: () => {
+          appendLiveDiagnostic("bot-llm-stopped", undefined, sessionId);
           setTranscriptRows((current) =>
             current.map((row) => (row.id === "assistant-live" ? { ...row, final: true } : row))
           );
         },
         onError: (message: RTVIMessage) => {
+          appendLiveDiagnostic("client-error", {
+            message: (message.data as { message?: string } | undefined)?.message ?? "Session failed",
+          }, sessionId);
           setErrorMessage((message.data as { message?: string } | undefined)?.message ?? "Session failed");
         },
         onDeviceError: (error) => {
           const devices = error.devices?.join(", ");
-          debugTransport("device-error", { type: error.type, devices });
+          appendLiveDiagnostic("device-error", {
+            type: error.type,
+            devices,
+            details: error.details,
+          }, sessionId);
           setErrorMessage(
             `Device error${devices ? ` (${devices})` : ""}: ${error.type}. Check your browser and macOS microphone permissions.`
           );
         },
         onTrackStarted: (track) => {
-          debugTransport("track-started", { kind: track.kind, readyState: track.readyState });
+          appendLiveDiagnostic("track-started", {
+            kind: track.kind,
+            readyState: track.readyState,
+          }, sessionId);
         },
         onTrackStopped: (track) => {
-          debugTransport("track-stopped", {
+          appendLiveDiagnostic("track-stopped", {
             kind: track.kind,
             readyState: track.readyState,
             connectionState: connectionStateRef.current,
-          });
+          }, sessionId);
         },
       },
     });
     clientRef.current = client;
-    await client.connect({
-      webrtcRequestParams: {
-        endpoint: offerEndpoint,
-        headers: new Headers({
-          Authorization: `Bearer ${accessToken}`,
-        }),
-      },
-    });
+    try {
+      await client.connect({
+        webrtcRequestParams: {
+          endpoint: offerEndpoint,
+          headers: new Headers({
+            Authorization: `Bearer ${accessToken}`,
+          }),
+        },
+      });
+      appendLiveDiagnostic("transport-connect-resolved", undefined, sessionId);
+    } catch (error) {
+      appendLiveDiagnostic("transport-connect-failed", {
+        message: error instanceof Error ? error.message : String(error),
+      }, sessionId);
+      throw error;
+    }
   }, [accessToken, session?.id, upsertRow]);
 
   // Fetch data for selected session
@@ -321,6 +381,7 @@ export function useLiveSession({
     sawLocalAudioRef.current = false;
     selectedMicLabelRef.current = null;
     setConnectionState("reconnecting");
+    appendLiveDiagnostic("session-resume-request", undefined, sessionId);
     try {
       if (clientRef.current) {
         await clientRef.current.disconnect();
@@ -332,11 +393,17 @@ export function useLiveSession({
       });
       if (!response.ok) throw new Error(await readResponseError(response, "Unable to resume the live session"));
       const payload = (await response.json()) as LocalSessionCreateResponse;
+      appendLiveDiagnostic("session-resume-response", {
+        status: payload.session.status,
+      }, payload.session.id);
       setSession(payload.session);
-      await connectClient(payload.offerEndpoint);
+      await connectClient(payload.session.id, payload.offerEndpoint);
       await fetchEvents(payload.session.id);
       await fetchTimeline(payload.session.id);
     } catch (error) {
+      appendLiveDiagnostic("session-resume-failed", {
+        message: error instanceof Error ? error.message : "Unable to resume the live session",
+      }, sessionId);
       setErrorMessage(error instanceof Error ? error.message : "Unable to resume the live session");
     } finally {
       resumeInFlightRef.current = false;
@@ -349,6 +416,9 @@ export function useLiveSession({
     sawLocalAudioRef.current = false;
     selectedMicLabelRef.current = null;
     setConnectionState("connecting");
+    appendLiveDiagnostic("session-create-request", {
+      conversationId,
+    }, null);
     try {
       const createResponse = await fetch(`${getAgentBaseUrl()}/api/local/sessions`, {
         method: "POST",
@@ -360,17 +430,24 @@ export function useLiveSession({
       });
       if (!createResponse.ok) throw new Error(await readResponseError(createResponse, "Unable to create a live session"));
       const payload = (await createResponse.json()) as LocalSessionCreateResponse;
+      appendLiveDiagnostic("session-create-response", {
+        conversationId: payload.conversationId,
+        status: payload.session.status,
+      }, payload.session.id);
       setSession(payload.session);
       setTranscriptRows([]);
       setTurnTimings([]);
       setRollingMetrics(null);
       setDegradationEvents([]);
       onSessionCreated(payload.session);
-      await connectClient(payload.offerEndpoint);
+      await connectClient(payload.session.id, payload.offerEndpoint);
       await fetchEvents(payload.session.id);
       await fetchTimeline(payload.session.id);
     } catch (error) {
       setConnectionState("failed");
+      appendLiveDiagnostic("session-create-failed", {
+        message: error instanceof Error ? error.message : "Unable to start live session",
+      });
       setErrorMessage(error instanceof Error ? error.message : "Unable to start live session");
     }
   }, [accessToken, conversationId, connectClient, fetchEvents, fetchTimeline, onSessionCreated]);
@@ -379,6 +456,7 @@ export function useLiveSession({
     if (!session) return;
     try {
       awaitingFirstTurnRef.current = false;
+      appendLiveDiagnostic("session-end-request", undefined, session.id);
       await fetch(`${getAgentBaseUrl()}/api/local/sessions/${session.id}/end`, {
         method: "POST",
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -387,8 +465,12 @@ export function useLiveSession({
       setConnectionState("ended");
       await fetchEvents(session.id);
       await fetchTimeline(session.id);
+      appendLiveDiagnostic("session-end-response", undefined, session.id);
       onSessionEnded();
     } catch (error) {
+      appendLiveDiagnostic("session-end-failed", {
+        message: error instanceof Error ? error.message : "Unable to end live session",
+      }, session.id);
       setErrorMessage(error instanceof Error ? error.message : "Unable to end live session");
     }
   }, [session, accessToken, fetchEvents, fetchTimeline, onSessionEnded]);

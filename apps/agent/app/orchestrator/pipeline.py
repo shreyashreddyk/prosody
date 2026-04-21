@@ -24,6 +24,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 
 from app.config import Settings
+from app.logging_utils import log_diagnostic
 from app.metrics.latency import LatencyRecorder
 from app.models import SessionEventRecord, TranscriptEventRecord
 from app.providers.factory import ProviderBundle
@@ -252,7 +253,15 @@ class SessionObserver(BaseObserver):
         if key in self._logged_turn_stages:
             return
         self._logged_turn_stages.add(key)
-        logger.info("Session %s turn %s %s", self._session_id, turn_id, message)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "session-turn-stage",
+            session_id=self._session_id,
+            turn_id=turn_id,
+            stage=stage,
+            message=message,
+        )
 
 
 def build_session_task(
@@ -287,7 +296,13 @@ def build_session_task(
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(_transport, _connection):
-        logger.info("SmallWebRTC client connected for session %s", session_id)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "smallwebrtc-client-connected",
+            session_id=session_id,
+            conversation_id=conversation_id,
+        )
         await transport.capture_participant_audio()
         store.append_session_event(
             SessionEventRecord(
@@ -305,7 +320,13 @@ def build_session_task(
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(_transport, _connection):
-        logger.info("SmallWebRTC client disconnected for session %s", session_id)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "smallwebrtc-client-disconnected",
+            session_id=session_id,
+            conversation_id=conversation_id,
+        )
         if on_transport_disconnected:
             result = on_transport_disconnected()
             if inspect.isawaitable(result):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -30,8 +31,11 @@ from app.orchestrator.pipeline import build_session_task
 from app.providers.factory import ProviderFactory
 from app.resilience import ResiliencePolicy, SessionResilienceCoordinator
 from app.replay.service import build_session_timeline, generate_replay_artifact
+from app.logging_utils import log_diagnostic
 from app.storage.base import SessionStore
 from app.storage.local_store import iso_now
+
+logger = logging.getLogger(__name__)
 
 
 async def _noop_fallback(_turn_id: str, _event) -> None:
@@ -74,6 +78,15 @@ class SessionManager:
         user: AuthenticatedUser,
     ) -> LocalSessionCreateResponse:
         session = self._store.create_session(conversation_id=conversation_id, owner_user_id=user.id)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "session-manager-create-session",
+            session_id=session.id,
+            conversation_id=session.conversationId,
+            user_id=user.id,
+            status=session.status,
+        )
         self._store.append_session_event(
             SessionEventRecord(
                 id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -115,6 +128,15 @@ class SessionManager:
 
     async def handle_offer(self, session_id: str, request: SmallWebRTCOfferRequest) -> SmallWebRTCOfferResponse:
         realtime = self._require_session(session_id)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "session-manager-handle-offer",
+            session_id=session_id,
+            conversation_id=realtime.session.conversationId,
+            restart_pc=request.restart_pc,
+            has_request_data=request.requestData is not None,
+        )
         payload = SmallWebRTCRequest.from_dict(request.model_dump(exclude_none=True))
 
         async def create_pipeline(webrtc_connection) -> None:
@@ -159,6 +181,16 @@ class SessionManager:
                 realtime.session.status = "ended"
                 realtime.session.endedAt = iso_now()
                 self._store.save_session(realtime.session)
+                log_diagnostic(
+                    logger,
+                    logging.INFO,
+                    "session-pipeline-finished",
+                    session_id=realtime.session.id,
+                    conversation_id=realtime.session.conversationId,
+                    status=realtime.session.status,
+                    ended_at=realtime.session.endedAt,
+                )
+                self._log_session_completion_diagnostics(realtime.session, outcome="pipeline_finished")
                 self._finalize_artifacts(realtime.session)
 
             @task.event_handler("on_pipeline_error")
@@ -170,6 +202,16 @@ class SessionManager:
                 realtime.session.status = "failed"
                 realtime.session.endedAt = iso_now()
                 self._store.save_session(realtime.session)
+                log_diagnostic(
+                    logger,
+                    logging.ERROR,
+                    "session-pipeline-error",
+                    session_id=realtime.session.id,
+                    conversation_id=realtime.session.conversationId,
+                    status=realtime.session.status,
+                    ended_at=realtime.session.endedAt,
+                    error=getattr(frame, "error", "unknown pipeline error"),
+                )
                 self._store.append_session_event(
                     SessionEventRecord(
                         id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -180,6 +222,7 @@ class SessionManager:
                         details={"message": getattr(frame, "error", "unknown pipeline error")},
                     )
                 )
+                self._log_session_completion_diagnostics(realtime.session, outcome="pipeline_error")
                 self._finalize_artifacts(realtime.session)
 
             realtime.runner_task = asyncio.create_task(runner.run(task))
@@ -190,6 +233,15 @@ class SessionManager:
         )
         realtime.session.status = "live"
         self._store.save_session(realtime.session)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "session-manager-offer-complete",
+            session_id=realtime.session.id,
+            conversation_id=realtime.session.conversationId,
+            status=realtime.session.status,
+            pc_id=answer.get("pc_id"),
+        )
         return SmallWebRTCOfferResponse.model_validate(answer)
 
     def resume_session(self, base_url: str, session_id: str) -> LocalSessionCreateResponse:
@@ -205,6 +257,15 @@ class SessionManager:
 
     async def handle_patch(self, session_id: str, request: SmallWebRTCPatchRequestModel) -> None:
         realtime = self._require_session(session_id)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "session-manager-handle-patch",
+            session_id=session_id,
+            conversation_id=realtime.session.conversationId,
+            candidate_count=len(request.candidates),
+            pc_id=request.pc_id,
+        )
         await realtime.request_handler.handle_patch_request(
             SmallWebRTCPatchRequest(
                 pc_id=request.pc_id,
@@ -229,6 +290,15 @@ class SessionManager:
         realtime.session.status = "ended"
         realtime.session.endedAt = iso_now()
         self._store.save_session(realtime.session)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "session-ended",
+            session_id=realtime.session.id,
+            conversation_id=realtime.session.conversationId,
+            status=realtime.session.status,
+            ended_at=realtime.session.endedAt,
+        )
         self._store.append_session_event(
             SessionEventRecord(
                 id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -238,6 +308,7 @@ class SessionManager:
                 createdAt=realtime.session.endedAt,
             )
         )
+        self._log_session_completion_diagnostics(realtime.session, outcome="manual_end")
         self._finalize_artifacts(realtime.session)
         return realtime.session
 
@@ -328,8 +399,24 @@ class SessionManager:
             )
         realtime.session.status = "live"
         self._store.save_session(realtime.session)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "transport-connected",
+            session_id=realtime.session.id,
+            conversation_id=realtime.session.conversationId,
+            status=realtime.session.status,
+        )
 
     async def _on_transport_disconnected(self, realtime: RealtimeSession) -> None:
+        log_diagnostic(
+            logger,
+            logging.WARNING,
+            "transport-disconnected",
+            session_id=realtime.session.id,
+            conversation_id=realtime.session.conversationId,
+            previous_status=realtime.session.status,
+        )
         self._store.append_session_event(
             SessionEventRecord(
                 id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -364,6 +451,14 @@ class SessionManager:
         realtime.observer = None
         realtime.session.status = "reconnecting"
         self._store.save_session(realtime.session)
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "transport-reconnecting",
+            session_id=realtime.session.id,
+            conversation_id=realtime.session.conversationId,
+            status=realtime.session.status,
+        )
 
     async def _expire_reconnect(self, realtime: RealtimeSession) -> None:
         if realtime.observer:
@@ -371,6 +466,15 @@ class SessionManager:
         realtime.session.status = "failed"
         realtime.session.endedAt = iso_now()
         self._store.save_session(realtime.session)
+        log_diagnostic(
+            logger,
+            logging.ERROR,
+            "transport-reconnect-expired",
+            session_id=realtime.session.id,
+            conversation_id=realtime.session.conversationId,
+            status=realtime.session.status,
+            ended_at=realtime.session.endedAt,
+        )
         self._store.append_session_event(
             SessionEventRecord(
                 id=f"evt_{uuid.uuid4().hex[:12]}",
@@ -381,4 +485,41 @@ class SessionManager:
                 details={"message": "Reconnect grace window expired"},
             )
         )
+        self._log_session_completion_diagnostics(realtime.session, outcome="reconnect_expired")
         self._finalize_artifacts(realtime.session)
+
+    def _log_session_completion_diagnostics(self, session: SessionRecord, *, outcome: str) -> None:
+        events = self._store.load_events(session.conversationId, session.id)
+        stages = [event.stage for event in events.latencyEvents]
+        has_first_user_audio = any(stage == "first_user_audio" for stage in stages)
+        no_inbound_audio = not has_first_user_audio and len(events.turns) == 0 and all(stage == "session_start" for stage in stages)
+        duration_ms = None
+        if session.startedAt and session.endedAt:
+            from app.metrics.latency import parse_iso
+
+            duration_ms = round((parse_iso(session.endedAt) - parse_iso(session.startedAt)).total_seconds() * 1000)
+
+        log_diagnostic(
+            logger,
+            logging.INFO,
+            "session-completion-summary",
+            session_id=session.id,
+            conversation_id=session.conversationId,
+            outcome=outcome,
+            status=session.status,
+            duration_ms=duration_ms,
+            latency_stages=stages,
+            turn_count=len(events.turns),
+            transcript_event_count=len(events.transcriptEvents),
+            degradation_event_count=len(self._store.load_degradation_events(session.conversationId, session.id)),
+        )
+        if no_inbound_audio:
+            log_diagnostic(
+                logger,
+                logging.WARNING,
+                "session-ended-without-inbound-audio",
+                session_id=session.id,
+                conversation_id=session.conversationId,
+                outcome=outcome,
+                duration_ms=duration_ms,
+            )

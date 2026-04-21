@@ -8,6 +8,7 @@ from pathlib import Path
 @dataclass(slots=True)
 class Settings:
     port: int
+    agent_log_level: str
     data_dir: Path
     web_allowed_origins: list[str]
     llm_provider: str
@@ -39,6 +40,7 @@ class Settings:
         )
         return cls(
             port=int(os.getenv("PORT", "8000")),
+            agent_log_level=os.getenv("AGENT_LOG_LEVEL", "INFO").strip().upper(),
             data_dir=Path(os.getenv("PROSODY_DATA_DIR", ".prosody-data")).resolve(),
             web_allowed_origins=[
                 item.strip() for item in web_allowed_origins.split(",") if item.strip()

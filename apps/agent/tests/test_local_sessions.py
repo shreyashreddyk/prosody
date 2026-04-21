@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 
@@ -168,3 +169,40 @@ def test_local_store_persists_events_in_order(tmp_path: Path) -> None:
     assert [event.id for event in snapshot.sessionEvents] == ["evt_1"]
     assert [event.id for event in snapshot.transcriptEvents] == ["evt_2"]
     assert [event.id for event in snapshot.latencyEvents] == ["evt_3"]
+
+
+def test_ending_session_without_audio_emits_classification_log(tmp_path: Path, monkeypatch, capsys, caplog) -> None:
+    _configure_env(tmp_path, monkeypatch)
+    caplog.set_level(logging.INFO)
+
+    with TestClient(app) as client:
+        seed = client.app.state.store.create_session("conv_diag")
+        client.app.dependency_overrides[get_current_user] = _override_user
+
+        create_response = client.post("/api/local/sessions", json={"conversation_id": seed.conversationId})
+        session_id = create_response.json()["session"]["id"]
+
+        end_response = client.post(f"/api/local/sessions/{session_id}/end")
+        assert end_response.status_code == 200
+
+        stderr_output = capsys.readouterr().err
+        assert "session-ended-without-inbound-audio" in stderr_output
+        assert session_id in stderr_output
+        client.app.dependency_overrides.clear()
+
+
+def test_session_logging_excludes_sensitive_headers(tmp_path: Path, monkeypatch, caplog) -> None:
+    _configure_env(tmp_path, monkeypatch)
+    caplog.set_level(logging.INFO)
+
+    with TestClient(app) as client:
+        seed = client.app.state.store.create_session("conv_logging")
+        client.app.dependency_overrides[get_current_user] = _override_user
+
+        response = client.post("/api/local/sessions", json={"conversation_id": seed.conversationId})
+        assert response.status_code == 200
+
+        assert "authorization" not in caplog.text.lower()
+        assert "bearer " not in caplog.text.lower()
+        assert "sdp" not in caplog.text.lower()
+        client.app.dependency_overrides.clear()
