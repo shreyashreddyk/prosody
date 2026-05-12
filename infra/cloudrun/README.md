@@ -25,6 +25,8 @@ docker build \
 docker build -f apps/agent/Dockerfile -t prosody-agent:local .
 ```
 
+GitHub Actions also runs Docker smoke builds for these two Dockerfiles when Docker-relevant paths change. Those CI builds validate that both images can be constructed with safe placeholder web build args, but they do not publish images, authenticate to Artifact Registry, or deploy Cloud Run services.
+
 Expected Artifact Registry image names:
 
 ```bash

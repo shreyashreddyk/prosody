@@ -82,8 +82,22 @@ Production-safe realtime defaults are deny-by-default. `VITE_ENABLE_LIVE_VOICE` 
 
 - `npm run typecheck`
 - `npm run build`
+- `npm run test --workspace @prosody/web --if-present`
 - `python3 -m compileall apps/agent/app`
 - `python3 -m pytest apps/agent/tests`
+
+## Continuous Integration
+
+GitHub Actions runs `.github/workflows/ci.yml` on every pull request and push. The workflow:
+
+- installs npm workspace dependencies with `npm ci`
+- typechecks and builds all JS workspaces
+- runs the web Vitest suite when the web test script is present
+- installs the Python agent package with Python 3.12
+- compiles the agent package and runs pytest when agent tests are present
+- smoke-builds the web and agent Docker images when Docker-relevant paths change
+
+The Docker smoke checks only build local CI tags; they do not push images, deploy to Cloud Run, or require production secrets. Docs-only changes skip the Docker smoke job, while the web and agent validation jobs still run.
 
 ## Notes
 
