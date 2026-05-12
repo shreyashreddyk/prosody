@@ -53,6 +53,12 @@ jobs:
   web:
     name: Web workspace
     runs-on: ubuntu-latest
+    env:
+      VITE_AGENT_BASE_URL: http://localhost:8000
+      VITE_ENABLE_LIVE_VOICE: "0"
+      VITE_ENABLE_UI_DEMO_TOOLS: "0"
+      VITE_SUPABASE_URL: https://example.supabase.co
+      VITE_SUPABASE_ANON_KEY: example
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
