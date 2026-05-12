@@ -127,6 +127,7 @@ describe("useLiveSession", () => {
       useLiveSession({
         accessToken: "token-123",
         conversationId: "conv_1",
+        liveVoiceEnabled: true,
         onSessionCreated: () => undefined,
         onSessionEnded: () => undefined,
       })
@@ -141,15 +142,33 @@ describe("useLiveSession", () => {
     const connectArgs = connectMock.mock.calls[0][0] as {
       webrtcRequestParams: { endpoint: string; headers: Headers };
     };
-    expect(wavMediaManagerMock).toHaveBeenCalledWith(undefined, 16000);
-    expect(smallWebRtcTransportMock).toHaveBeenCalledWith({
-      mediaManager: { type: "wav-media-manager" },
-    });
+    expect(smallWebRtcTransportMock).toHaveBeenCalledWith();
     expect(connectArgs.webrtcRequestParams.endpoint).toBe(
       "http://127.0.0.1:8000/api/local/sessions/sess_1/offer"
     );
     expect(connectArgs.webrtcRequestParams.headers.get("Authorization")).toBe("Bearer token-123");
-    expect(loggerSetLevelMock).toHaveBeenCalledWith(4);
+  });
+
+  it("blocks local session creation when live voice is disabled", async () => {
+    const fetchMock = vi.mocked(fetch);
+
+    const { result } = renderHook(() =>
+      useLiveSession({
+        accessToken: "token-123",
+        conversationId: "conv_1",
+        liveVoiceEnabled: false,
+        onSessionCreated: () => undefined,
+        onSessionEnded: () => undefined,
+      })
+    );
+
+    await act(async () => {
+      await result.current.startSession();
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(connectMock).not.toHaveBeenCalled();
+    expect(result.current.errorMessage).toBe("Live voice is disabled in this environment.");
   });
 
   it("surfaces a no-audio diagnostic when the session ends without backend turns", async () => {
@@ -211,6 +230,7 @@ describe("useLiveSession", () => {
       useLiveSession({
         accessToken: "token-123",
         conversationId: "conv_1",
+        liveVoiceEnabled: true,
         onSessionCreated: () => undefined,
         onSessionEnded: () => undefined,
       })
@@ -286,6 +306,7 @@ describe("useLiveSession", () => {
       useLiveSession({
         accessToken: "token-123",
         conversationId: "conv_1",
+        liveVoiceEnabled: true,
         onSessionCreated: () => undefined,
         onSessionEnded: () => undefined,
       })
@@ -362,6 +383,7 @@ describe("useLiveSession", () => {
       useLiveSession({
         accessToken: "token-123",
         conversationId: "conv_1",
+        liveVoiceEnabled: true,
         onSessionCreated: () => undefined,
         onSessionEnded: () => undefined,
       })

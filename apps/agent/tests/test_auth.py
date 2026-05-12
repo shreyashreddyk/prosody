@@ -9,6 +9,7 @@ from app.config import Settings
 def _settings(**overrides: object) -> Settings:
     values = {
         "port": 8000,
+        "agent_log_level": "INFO",
         "data_dir": ".",
         "web_allowed_origins": ["http://127.0.0.1:5173"],
         "llm_provider": "openai",
@@ -22,6 +23,7 @@ def _settings(**overrides: object) -> Settings:
         "supabase_anon_key": None,
         "supabase_service_role_key": "service-role",
         "supabase_jwt_secret": "test-jwt-secret",
+        "enable_local_smallwebrtc": True,
         "smallwebrtc_ice_servers": ["stun:stun.l.google.com:19302"],
         "input_sample_rate": 16000,
         "output_sample_rate": 24000,

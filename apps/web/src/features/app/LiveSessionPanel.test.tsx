@@ -51,6 +51,7 @@ describe("CenterPane", () => {
         degradationEvents={[]}
         errorMessage={null}
         hasConversation={false}
+        liveVoiceEnabled={true}
         onStart={() => undefined}
         onEnd={() => undefined}
       />
@@ -71,6 +72,7 @@ describe("CenterPane", () => {
         degradationEvents={[]}
         errorMessage={null}
         hasConversation={true}
+        liveVoiceEnabled={true}
         onStart={() => undefined}
         onEnd={() => undefined}
       />
@@ -104,6 +106,7 @@ describe("CenterPane", () => {
         ]}
         errorMessage={null}
         hasConversation={true}
+        liveVoiceEnabled={true}
         onStart={() => undefined}
         onEnd={() => undefined}
       />
@@ -121,6 +124,7 @@ describe("CenterPane", () => {
         degradationEvents={[]}
         errorMessage={null}
         hasConversation={true}
+        liveVoiceEnabled={true}
         onStart={() => undefined}
         onEnd={() => undefined}
       />
@@ -138,10 +142,31 @@ describe("CenterPane", () => {
         degradationEvents={[]}
         errorMessage="Connection failed"
         hasConversation={true}
+        liveVoiceEnabled={true}
         onStart={() => undefined}
         onEnd={() => undefined}
       />
     );
     expect(screen.getByText("Connection failed")).toBeTruthy();
+  });
+
+  it("shows live voice unavailable state when production gating disables voice", () => {
+    render(
+      <CenterPane
+        connectionState="idle"
+        transcriptRows={[]}
+        allSessions={[]}
+        allTurns={[]}
+        degradationEvents={[]}
+        errorMessage={null}
+        hasConversation={true}
+        liveVoiceEnabled={false}
+        onStart={() => undefined}
+        onEnd={() => undefined}
+      />
+    );
+    expect(screen.getAllByText("Live voice unavailable").length).toBeGreaterThan(0);
+    expect(screen.getByText("Realtime voice is local/dev only.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /start session/i })).toBeNull();
   });
 });

@@ -137,6 +137,7 @@ export function CenterPane({
   degradationEvents,
   errorMessage,
   hasConversation,
+  liveVoiceEnabled,
   onStart,
   onEnd,
 }: {
@@ -148,6 +149,7 @@ export function CenterPane({
   degradationEvents: DegradationEvent[];
   errorMessage: string | null;
   hasConversation: boolean;
+  liveVoiceEnabled: boolean;
   onStart: () => void;
   onEnd: () => void;
 }) {
@@ -211,7 +213,11 @@ export function CenterPane({
       <section className="flex items-center justify-center h-full">
         <EmptyState
           heading="Welcome to Prosody"
-          description="Create a conversation to unlock live voice coaching, transcript history, and source attachments."
+          description={
+            liveVoiceEnabled
+              ? "Create a conversation to unlock local voice coaching, transcript history, and source attachments."
+              : "Create a conversation to unlock transcript history, source attachments, summaries, and flashcards."
+          }
         />
       </section>
     );
@@ -223,8 +229,12 @@ export function CenterPane({
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-2 py-4 space-y-1">
         {sessionGroups.length === 0 && transcriptRows.length === 0 ? (
           <EmptyState
-            heading="Start a session to begin coaching"
-            description="Your coach will respond in real time. The full transcript is saved to your workspace."
+            heading={liveVoiceEnabled ? "Start a session to begin coaching" : "Live voice unavailable"}
+            description={
+              liveVoiceEnabled
+                ? "Your coach will respond in real time. The full transcript is saved to your workspace."
+                : "The deployed workspace supports auth, uploads, history, summaries, flashcards, and metrics while realtime voice stays local-only."
+            }
           />
         ) : (
           sessionGroups.map((group) => (
@@ -300,12 +310,16 @@ export function CenterPane({
         <div className="flex items-center justify-between gap-3">
           {/* Status */}
           <div className="flex items-center gap-2">
-            <StatusBadge
-              tone={connectionStatusTone(connectionState)}
-              pulse={isActive || connectionState === "reconnecting"}
-            >
-              {connectionStatusLabel(connectionState)}
-            </StatusBadge>
+            {liveVoiceEnabled ? (
+              <StatusBadge
+                tone={connectionStatusTone(connectionState)}
+                pulse={isActive || connectionState === "reconnecting"}
+              >
+                {connectionStatusLabel(connectionState)}
+              </StatusBadge>
+            ) : (
+              <StatusBadge tone="neutral">Live voice unavailable</StatusBadge>
+            )}
             {activeDegradations.length > 0 && (
               <span className="text-[10px] text-accent-red font-medium">
                 Degraded — text-only mode
@@ -315,20 +329,28 @@ export function CenterPane({
 
           {/* Actions */}
           <div className="flex items-center gap-2">
-            <button
-              className="btn-primary text-xs px-4 py-1.5"
-              onClick={onStart}
-              disabled={isActive}
-            >
-              Start session
-            </button>
-            <button
-              className="btn-secondary text-xs px-4 py-1.5"
-              onClick={onEnd}
-              disabled={!currentLiveSessionId || connectionState === "ended"}
-            >
-              End session
-            </button>
+            {liveVoiceEnabled ? (
+              <>
+                <button
+                  className="btn-primary text-xs px-4 py-1.5"
+                  onClick={onStart}
+                  disabled={isActive}
+                >
+                  Start session
+                </button>
+                <button
+                  className="btn-secondary text-xs px-4 py-1.5"
+                  onClick={onEnd}
+                  disabled={!currentLiveSessionId || connectionState === "ended"}
+                >
+                  End session
+                </button>
+              </>
+            ) : (
+              <span className="text-[11px] text-text-muted">
+                Realtime voice is local/dev only.
+              </span>
+            )}
           </div>
         </div>
 

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import { createConversation, loadBootstrap, loadConversationWorkspace, uploadSource } from "./data";
-import { getAgentBaseUrl } from "../../lib/supabase";
+import { getAgentBaseUrl, isLiveVoiceEnabled } from "../../lib/supabase";
 import { AppHeader } from "./AppHeader";
 import { LeftPane } from "./LeftPane";
 import { CenterPane } from "./CenterPane";
@@ -40,6 +40,7 @@ export function AppShell() {
   const [flashcardsLoading, setFlashcardsLoading] = useState(false);
 
   const activeConversationId = conversationId ?? conversations[0]?.conversation.id;
+  const liveVoiceEnabled = isLiveVoiceEnabled();
 
   /* ── Data loading ── */
 
@@ -104,6 +105,7 @@ export function AppShell() {
     accessToken: authSession?.access_token ?? "",
     conversationId: activeConversationId ?? "",
     selectedSessionId,
+    liveVoiceEnabled,
     onSessionCreated: async (createdSession: Session) => {
       setSelectedSessionId(createdSession.id);
       if (activeConversationId) {
@@ -279,7 +281,7 @@ export function AppShell() {
               </button>
               <p className="text-text-muted text-xs mt-4 max-w-xs leading-relaxed">
                 After creating a workspace, upload your resume or prompt notes,
-                then start a live session.
+                then review history, summaries, and flashcards.
               </p>
             </div>
           ) : (
@@ -292,6 +294,7 @@ export function AppShell() {
               degradationEvents={liveSession.degradationEvents}
               errorMessage={liveSession.errorMessage}
               hasConversation={!!activeConversationId}
+              liveVoiceEnabled={liveVoiceEnabled}
               onStart={() => void liveSession.startSession()}
               onEnd={() => void liveSession.endSession()}
             />

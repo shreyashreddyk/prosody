@@ -267,7 +267,7 @@ class SessionObserver(BaseObserver):
             session_id=self._session_id,
             turn_id=turn_id,
             stage=stage,
-            message=message,
+            stage_message=message,
         )
 
 

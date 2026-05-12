@@ -30,6 +30,7 @@ class MetaResponse(BaseModel):
     realtime_status: str
     intended_local_transport: str
     intended_deployed_transport: str
+    local_smallwebrtc_enabled: bool
     provider_config: ProviderConfigState
     supabase: SupabaseState
 

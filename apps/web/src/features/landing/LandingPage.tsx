@@ -1,36 +1,37 @@
 import { Navigate } from "react-router-dom";
+import { isLiveVoiceEnabled } from "../../lib/supabase";
 import { useAuth } from "../auth/AuthProvider";
-
-const FEATURES = [
-  {
-    icon: "💬",
-    title: "Persistent Workspaces",
-    description:
-      "Every conversation persists across sessions. Resume where you left off with full history, sources, and metrics.",
-  },
-  {
-    icon: "🎙️",
-    title: "Live Voice Coaching",
-    description:
-      "Real-time AI coach that listens, responds, and adapts. Sub-second latency with live transcript tracking.",
-  },
-  {
-    icon: "📄",
-    title: "Source-Grounded Context",
-    description:
-      "Upload resumes, prompt notes, or presentation material. Your coach references them during live sessions.",
-  },
-];
-
-const STEPS = [
-  { step: "01", label: "Sign in with Google" },
-  { step: "02", label: "Create a workspace" },
-  { step: "03", label: "Upload your sources" },
-  { step: "04", label: "Start a live session" },
-];
 
 export function LandingPage() {
   const { session, signInWithGoogle } = useAuth();
+  const liveVoiceEnabled = isLiveVoiceEnabled();
+  const features = [
+    {
+      icon: "💬",
+      title: "Persistent Workspaces",
+      description:
+        "Every conversation persists across sessions. Resume where you left off with full history, sources, and metrics.",
+    },
+    {
+      icon: "🎙️",
+      title: liveVoiceEnabled ? "Live Voice Coaching" : "Realtime Voice Roadmap",
+      description: liveVoiceEnabled
+        ? "Local realtime coaching with live transcript tracking and transport diagnostics."
+        : "The deployed product keeps voice hidden while the production transport is being integrated.",
+    },
+    {
+      icon: "📄",
+      title: "Source-Grounded Context",
+      description:
+        "Upload resumes, prompt notes, or presentation material. Prosody uses them for summaries, flashcards, and coaching history.",
+    },
+  ];
+  const steps = [
+    { step: "01", label: "Sign in with Google" },
+    { step: "02", label: "Create a workspace" },
+    { step: "03", label: "Upload your sources" },
+    { step: "04", label: liveVoiceEnabled ? "Start a local voice session" : "Review history and study aids" },
+  ];
 
   if (session) {
     return <Navigate to="/app" replace />;
@@ -55,8 +56,8 @@ export function LandingPage() {
             </h1>
             <p className="text-text-secondary text-lg leading-relaxed max-w-md mb-8">
               Prosody is a persistent coaching workspace for interviews and
-              presentations. Live voice sessions, source uploads, transcripts,
-              summaries, and flashcards — all in one place.
+              presentations. Source uploads, transcript history, summaries,
+              flashcards, and metrics stay together across sessions.
             </p>
             <div className="flex flex-wrap gap-3">
               <button
@@ -106,7 +107,7 @@ export function LandingPage() {
       {/* ── Feature Grid ── */}
       <section className="px-6 py-16 border-t border-border-subtle">
         <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8">
-          {FEATURES.map((feature) => (
+          {features.map((feature) => (
             <div
               key={feature.title}
               className="glass-panel-subtle p-6 flex flex-col gap-3 animate-slide-up"
@@ -133,7 +134,7 @@ export function LandingPage() {
             How it works
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-            {STEPS.map((item) => (
+            {steps.map((item) => (
               <div key={item.step} className="text-center animate-slide-up">
                 <p className="text-2xl font-bold text-accent-teal mb-2 font-mono">
                   {item.step}

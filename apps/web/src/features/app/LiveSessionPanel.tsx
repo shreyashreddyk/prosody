@@ -92,12 +92,14 @@ export function useLiveSession({
   accessToken,
   conversationId,
   selectedSessionId,
+  liveVoiceEnabled = false,
   onSessionCreated,
   onSessionEnded,
 }: {
   accessToken: string;
   conversationId: string;
   selectedSessionId?: string;
+  liveVoiceEnabled?: boolean;
   onSessionCreated: (session: Session) => void;
   onSessionEnded: () => void;
 }) {
@@ -202,6 +204,9 @@ export function useLiveSession({
   }, [accessToken]);
 
   const connectClient = useCallback(async (sessionId: string, offerEndpoint: string) => {
+    if (!liveVoiceEnabled) {
+      throw new Error("Live voice is disabled in this environment.");
+    }
     setActiveLiveDiagnosticsSession(sessionId);
     stopPeerConnectionStatsPolling();
     appendLiveDiagnostic("transport-connect-start", {
@@ -337,7 +342,7 @@ export function useLiveSession({
       }, sessionId);
       throw error;
     }
-  }, [accessToken, session?.id, upsertRow]);
+  }, [accessToken, liveVoiceEnabled, session?.id, upsertRow]);
 
   // Fetch data for selected session
   useEffect(() => {
@@ -377,6 +382,7 @@ export function useLiveSession({
   // Auto-resume on reconnecting state
   useEffect(() => {
     if (
+      liveVoiceEnabled &&
       session?.status === "reconnecting" &&
       activeSessionId &&
       connectionState !== "connecting" &&
@@ -384,9 +390,13 @@ export function useLiveSession({
     ) {
       void handleResume(activeSessionId);
     }
-  }, [session?.status, activeSessionId, connectionState]);
+  }, [liveVoiceEnabled, session?.status, activeSessionId, connectionState]);
 
   const handleResume = async (sessionId: string) => {
+    if (!liveVoiceEnabled) {
+      setErrorMessage("Live voice is disabled in this environment.");
+      return;
+    }
     if (resumeInFlightRef.current) return;
     resumeInFlightRef.current = true;
     awaitingFirstTurnRef.current = true;
@@ -425,6 +435,15 @@ export function useLiveSession({
   };
 
   const startSession = useCallback(async () => {
+    if (!liveVoiceEnabled) {
+      setConnectionState("idle");
+      setErrorMessage("Live voice is disabled in this environment.");
+      appendLiveDiagnostic("session-create-blocked", {
+        reason: "live_voice_disabled",
+        conversationId,
+      }, null);
+      return;
+    }
     setErrorMessage(null);
     awaitingFirstTurnRef.current = true;
     sawLocalAudioRef.current = false;
@@ -465,9 +484,13 @@ export function useLiveSession({
       });
       setErrorMessage(error instanceof Error ? error.message : "Unable to start live session");
     }
-  }, [accessToken, conversationId, connectClient, fetchEvents, fetchTimeline, onSessionCreated]);
+  }, [accessToken, conversationId, connectClient, fetchEvents, fetchTimeline, liveVoiceEnabled, onSessionCreated]);
 
   const endSession = useCallback(async () => {
+    if (!liveVoiceEnabled) {
+      setErrorMessage("Live voice is disabled in this environment.");
+      return;
+    }
     if (!session) return;
     try {
       awaitingFirstTurnRef.current = false;
@@ -490,7 +513,7 @@ export function useLiveSession({
       }, session.id);
       setErrorMessage(error instanceof Error ? error.message : "Unable to end live session");
     }
-  }, [session, accessToken, fetchEvents, fetchTimeline, onSessionEnded]);
+  }, [session, accessToken, fetchEvents, fetchTimeline, liveVoiceEnabled, onSessionEnded]);
 
   return {
     connectionState,

@@ -22,6 +22,7 @@ class Settings:
     supabase_anon_key: str | None
     supabase_service_role_key: str | None
     supabase_jwt_secret: str | None
+    enable_local_smallwebrtc: bool
     smallwebrtc_ice_servers: list[str]
     input_sample_rate: int
     output_sample_rate: int
@@ -63,6 +64,8 @@ class Settings:
             supabase_anon_key=os.getenv("SUPABASE_ANON_KEY"),
             supabase_service_role_key=os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
             supabase_jwt_secret=os.getenv("SUPABASE_JWT_SECRET"),
+            enable_local_smallwebrtc=os.getenv("ENABLE_LOCAL_SMALLWEBRTC", "").strip().lower()
+            in {"1", "true"},
             smallwebrtc_ice_servers=[item.strip() for item in ice_servers.split(",") if item.strip()],
             input_sample_rate=int(os.getenv("AUDIO_INPUT_SAMPLE_RATE", "16000")),
             output_sample_rate=int(os.getenv("AUDIO_OUTPUT_SAMPLE_RATE", "24000")),

@@ -1,8 +1,8 @@
 # Prosody
 
-Prosody is a production-style real-time multimodal interview and presentation coach. This repository currently provides the initial monorepo scaffold, shared contracts, a placeholder web experience, and a minimal FastAPI agent service.
+Prosody is a production-style AI interview and presentation coaching workspace. The current deployable surface focuses on authentication, persistent conversations, source uploads, transcript history, summaries, flashcards, metrics, and health/meta endpoints.
 
-The repo now includes a local-only v1 realtime voice loop built around Pipecat and `SmallWebRTCTransport`. This version is focused on a single-user local flow, explicit observability, and simple file-based persistence rather than auth, deployment, or product polish.
+The repo also includes a local-only experimental realtime voice loop built around Pipecat and `SmallWebRTCTransport`. That path is preserved for local development and diagnostics, but it is feature-gated off by default so Cloud Run deployments do not expose the local transport as a public production feature. Realtime voice remains experimental until `DailyTransport` or an equivalent production transport is integrated.
 
 ## Stack
 
@@ -19,21 +19,20 @@ The repo now includes a local-only v1 realtime voice loop built around Pipecat a
 
 ## Monorepo Layout
 
-- `apps/web`: placeholder React app and future authenticated product shell
-- `apps/agent`: FastAPI service with health/meta endpoints and reserved realtime modules
+- `apps/web`: authenticated React product shell with conversations, sources, history, summaries, flashcards, metrics, and gated live voice controls
+- `apps/agent`: FastAPI service with health/meta endpoints, authenticated product generation APIs, Supabase-backed persistence, and gated local realtime routes
 - `packages/contracts`: shared TypeScript contracts for core product entities and events
 - `packages/ui`: minimal shared UI primitives used by the web app
 - `infra`: deployment/provider notes and future infrastructure assets
 - `docs`: local-only learning trail and design notes (gitignored)
 
-## Current Baseline
+## Current Deployment Posture
 
-- Shared contracts for `Conversation`, `Session`, `Turn`, `Source`, `LatencyEvent`, `DegradationEvent`, and `FlashcardSet`
-- Shared realtime contracts for transcript, session, and latency events
-- Minimal local realtime web page with start/end controls, live transcript updates, and connection state
-- FastAPI service with health/meta routes plus local session, offer, ICE patch, end, and events APIs
-- File-based local persistence under `PROSODY_DATA_DIR`
-- Local documentation baseline covering architecture, contracts, evaluation, and failure cases
+- Productionized surface: Supabase Auth, persistent conversations, source uploads, session/turn history, summaries, flashcards, metrics/timeline reads, and agent health/meta endpoints
+- Local/dev-only surface: Pipecat `SmallWebRTCTransport` session creation, offer/ICE signaling, resume, and end routes
+- The browser hides live voice controls unless `VITE_ENABLE_LIVE_VOICE=1` or `true`
+- The agent rejects local SmallWebRTC lifecycle/signaling calls unless `ENABLE_LOCAL_SMALLWEBRTC=1` or `true`
+- Cloud Run deployments should omit both realtime flags, or set them to `0`, until the deployed realtime transport is implemented
 
 ## Local Run
 
@@ -56,7 +55,14 @@ python3 -m venv .venv
 .venv/bin/pip install -e apps/agent
 ```
 
-4. Start the agent:
+4. Enable local realtime flags in `apps/web/.env.local` and `apps/agent/.env` if you want to use the experimental SmallWebRTC path:
+
+```bash
+VITE_ENABLE_LIVE_VOICE=1
+ENABLE_LOCAL_SMALLWEBRTC=1
+```
+
+5. Start the agent:
 
 ```bash
 npm run dev:agent
@@ -70,6 +76,8 @@ npm run dev:agent
 
 Keep Supabase anon and agent base URL in the web env. Keep OpenAI, Deepgram, ElevenLabs, Daily, and Supabase service-role secrets in the agent env only.
 
+Production-safe realtime defaults are deny-by-default. `VITE_ENABLE_LIVE_VOICE` and `ENABLE_LOCAL_SMALLWEBRTC` must be explicitly enabled for local development; they should remain disabled in Cloud Run until `DailyTransport` or another production transport replaces the local path.
+
 ## Validation
 
 - `npm run typecheck`
@@ -80,4 +88,5 @@ Keep Supabase anon and agent base URL in the web env. Keep OpenAI, Deepgram, Ele
 ## Notes
 
 - The docs under `docs/` are local-only and intentionally ignored by Git.
-- This version is local-only and does not yet include auth, Daily transport, Supabase persistence, uploads, summaries, flashcards, or replay controls.
+- The deployable product surface is productionized around auth, persistence, uploads, history, summaries, flashcards, metrics, and health/meta.
+- Realtime voice is intentionally local/dev only in this version. Do not present the current `SmallWebRTCTransport` path as the public production experience.

@@ -22,6 +22,7 @@ def _configure_env(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("DEEPGRAM_API_KEY", "test-deepgram")
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-eleven")
     monkeypatch.setenv("ELEVENLABS_VOICE_ID", "voice-id")
+    monkeypatch.setenv("ENABLE_LOCAL_SMALLWEBRTC", "1")
 
 
 def _override_user() -> AuthenticatedUser:
@@ -66,6 +67,21 @@ def test_local_session_routes_reject_missing_auth(tmp_path: Path, monkeypatch) -
     with TestClient(app) as client:
         response = client.post("/api/local/sessions", json={"conversation_id": "conv_missing"})
     assert response.status_code == 401
+
+
+def test_local_session_create_is_disabled_without_local_smallwebrtc_flag(tmp_path: Path, monkeypatch) -> None:
+    _configure_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("ENABLE_LOCAL_SMALLWEBRTC", raising=False)
+
+    with TestClient(app) as client:
+        seed = client.app.state.store.create_session("conv_disabled")
+        client.app.dependency_overrides[get_current_user] = _override_user
+
+        response = client.post("/api/local/sessions", json={"conversation_id": seed.conversationId})
+
+        assert response.status_code == 403
+        assert "Local SmallWebRTC realtime is disabled" in response.json()["detail"]
+        client.app.dependency_overrides.clear()
 
 
 def test_local_session_create_route_handles_allowed_cors_preflight(tmp_path: Path, monkeypatch) -> None:

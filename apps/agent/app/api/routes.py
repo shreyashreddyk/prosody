@@ -52,12 +52,18 @@ def _supabase_state(request: Request) -> SupabaseState:
 @router.get("/", response_model=MetaResponse)
 @router.get("/meta", response_model=MetaResponse)
 def meta(request: Request) -> MetaResponse:
+    settings = request.app.state.settings
     return MetaResponse(
         service="prosody-agent",
         version="0.1.0",
-        realtime_status="cloud_v3_authenticated",
+        realtime_status=(
+            "local_smallwebrtc_enabled"
+            if settings.enable_local_smallwebrtc
+            else "production_realtime_disabled"
+        ),
         intended_local_transport="SmallWebRTCTransport",
         intended_deployed_transport="DailyTransport",
+        local_smallwebrtc_enabled=settings.enable_local_smallwebrtc,
         provider_config=ProviderConfigState(
             deepgram_configured=_is_configured("DEEPGRAM_API_KEY"),
             elevenlabs_configured=_is_configured("ELEVENLABS_API_KEY"),
@@ -88,10 +94,23 @@ def _store(request: Request):
     return request.app.state.store
 
 
+def require_local_smallwebrtc_enabled(request: Request) -> None:
+    settings = request.app.state.settings
+    if not settings.enable_local_smallwebrtc:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Local SmallWebRTC realtime is disabled in this environment. "
+                "Set ENABLE_LOCAL_SMALLWEBRTC=1 only for local/dev runs."
+            ),
+        )
+
+
 @router.post("/api/local/sessions", response_model=LocalSessionCreateResponse)
 def create_local_session(
     payload: LocalSessionCreateRequest,
     request: Request,
+    _local_realtime_enabled: None = Depends(require_local_smallwebrtc_enabled),
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> LocalSessionCreateResponse:
     if not payload.conversation_id:
@@ -146,6 +165,7 @@ async def create_offer(
     session_id: str,
     payload: SmallWebRTCOfferRequest,
     request: Request,
+    _local_realtime_enabled: None = Depends(require_local_smallwebrtc_enabled),
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> SmallWebRTCOfferResponse:
     log_diagnostic(
@@ -208,6 +228,7 @@ async def create_offer(
 def resume_local_session(
     session_id: str,
     request: Request,
+    _local_realtime_enabled: None = Depends(require_local_smallwebrtc_enabled),
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> LocalSessionCreateResponse:
     try:
@@ -227,6 +248,7 @@ async def patch_offer(
     session_id: str,
     payload: SmallWebRTCPatchRequestModel,
     request: Request,
+    _local_realtime_enabled: None = Depends(require_local_smallwebrtc_enabled),
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> None:
     log_diagnostic(
@@ -278,6 +300,7 @@ async def patch_offer(
 async def end_local_session(
     session_id: str,
     request: Request,
+    _local_realtime_enabled: None = Depends(require_local_smallwebrtc_enabled),
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> SessionRecord:
     log_diagnostic(

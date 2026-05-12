@@ -18,3 +18,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 export function getAgentBaseUrl() {
   return import.meta.env.VITE_AGENT_BASE_URL ?? "http://127.0.0.1:8000";
 }
+
+export function isLiveVoiceEnabled() {
+  const value = String(import.meta.env.VITE_ENABLE_LIVE_VOICE ?? "").trim().toLowerCase();
+  return value === "1" || value === "true";
+}

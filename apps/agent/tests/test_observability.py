@@ -19,6 +19,7 @@ def _configure_env(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("DEEPGRAM_API_KEY", "test-deepgram")
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-eleven")
     monkeypatch.setenv("ELEVENLABS_VOICE_ID", "voice-id")
+    monkeypatch.setenv("ENABLE_LOCAL_SMALLWEBRTC", "1")
 
 
 def _override_user() -> AuthenticatedUser:
