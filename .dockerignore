@@ -1,0 +1,46 @@
+.git
+.gitignore
+.dockerignore
+
+# Local-only notes and generated artifacts
+docs/
+repo_structure.md
+AGENTS.md
+GEMINI.md
+
+# Environment files
+.env
+.env.*
+!.env.example
+apps/agent/.env
+apps/web/.env
+apps/web/.env.local
+
+# Node
+node_modules/
+**/node_modules/
+apps/web/dist/
+packages/*/dist/
+npm-debug.log*
+
+# Python
+.venv/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+
+# Build/test/cache output
+dist/
+build/
+coverage/
+.cache/
+.vite/
+.turbo/
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
