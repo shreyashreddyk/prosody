@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppShell } from "./AppShell";
 
 const useAuthMock = vi.fn();
@@ -51,6 +51,10 @@ vi.mock("./data", () => ({
 }));
 
 describe("AppShell", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     useAuthMock.mockReturnValue({
       user: { id: "user-1", email: "user@example.com" },
