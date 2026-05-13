@@ -120,7 +120,7 @@ jobs:
           env_vars: |-
             AGENT_LOG_LEVEL=${{ steps.config.outputs.agent_log_level }}
             ENABLE_LOCAL_SMALLWEBRTC=${{ steps.config.outputs.enable_local_smallwebrtc }}
-            WEB_ALLOWED_ORIGINS="${{ env.WEB_ALLOWED_ORIGINS }}"
+            WEB_ALLOWED_ORIGINS=${{ env.WEB_ALLOWED_ORIGINS }}
             SUPABASE_URL=${{ env.SUPABASE_URL }}
             LLM_PROVIDER=${{ steps.config.outputs.llm_provider }}
             LLM_MODEL=${{ steps.config.outputs.llm_model }}

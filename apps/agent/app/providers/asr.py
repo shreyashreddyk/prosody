@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
-from pipecat.transcriptions.language import Language
+from typing import Any
 
 from app.providers.base import AsrProvider
 
@@ -11,7 +10,10 @@ class DeepgramFluxAsrProvider(AsrProvider):
         self._api_key = api_key
         self._sample_rate = sample_rate
 
-    def build(self) -> DeepgramFluxSTTService:
+    def build(self) -> Any:
+        from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
+        from pipecat.transcriptions.language import Language
+
         return DeepgramFluxSTTService(
             api_key=self._api_key,
             sample_rate=self._sample_rate,

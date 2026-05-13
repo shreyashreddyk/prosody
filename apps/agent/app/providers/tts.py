@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+from typing import Any
 
 from app.providers.base import TtsProvider
 
@@ -11,7 +11,9 @@ class ElevenLabsWebSocketTtsProvider(TtsProvider):
         self._voice_id = voice_id
         self._sample_rate = sample_rate
 
-    def build(self) -> ElevenLabsTTSService:
+    def build(self) -> Any:
+        from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+
         return ElevenLabsTTSService(
             api_key=self._api_key,
             sample_rate=self._sample_rate,

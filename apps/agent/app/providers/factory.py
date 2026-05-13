@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.config import Settings
-from app.providers.asr import DeepgramFluxAsrProvider
-from app.providers.llm import OpenAiLlmProvider
-from app.providers.tts import ElevenLabsWebSocketTtsProvider
+
+if TYPE_CHECKING:
+    from app.providers.asr import DeepgramFluxAsrProvider
+    from app.providers.llm import OpenAiLlmProvider
+    from app.providers.tts import ElevenLabsWebSocketTtsProvider
 
 
 @dataclass(slots=True)
@@ -20,6 +23,10 @@ class ProviderFactory:
         self._settings = settings
 
     def build(self) -> ProviderBundle:
+        from app.providers.asr import DeepgramFluxAsrProvider
+        from app.providers.llm import OpenAiLlmProvider
+        from app.providers.tts import ElevenLabsWebSocketTtsProvider
+
         if not self._settings.deepgram_api_key:
             raise ValueError("DEEPGRAM_API_KEY is required for local realtime sessions")
         if not self._settings.elevenlabs_api_key or not self._settings.elevenlabs_voice_id:

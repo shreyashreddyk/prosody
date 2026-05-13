@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pipecat.services.openai.llm import OpenAILLMService
+from typing import Any
 
 from app.providers.base import LlmProvider
 
@@ -10,7 +10,9 @@ class OpenAiLlmProvider(LlmProvider):
         self._api_key = api_key
         self._model = model
 
-    def build(self) -> OpenAILLMService:
+    def build(self) -> Any:
+        from pipecat.services.openai.llm import OpenAILLMService
+
         return OpenAILLMService(
             api_key=self._api_key,
             settings=OpenAILLMService.Settings(

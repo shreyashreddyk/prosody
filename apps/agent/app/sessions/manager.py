@@ -7,14 +7,6 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from pipecat.frames.frames import EndFrame
-from pipecat.transports.smallwebrtc.request_handler import (
-    ConnectionMode,
-    SmallWebRTCPatchRequest,
-    SmallWebRTCRequest,
-    SmallWebRTCRequestHandler,
-)
-
 from app.config import Settings
 from app.models import (
     AuthenticatedUser,
@@ -28,7 +20,6 @@ from app.models import (
     SmallWebRTCOfferResponse,
     SmallWebRTCPatchRequestModel,
 )
-from app.orchestrator.pipeline import build_session_task
 from app.providers.factory import ProviderFactory
 from app.resilience import ResiliencePolicy, SessionResilienceCoordinator
 from app.replay.service import build_session_timeline, generate_replay_artifact
@@ -51,7 +42,7 @@ async def _noop_async() -> None:
 @dataclass
 class RealtimeSession:
     session: SessionRecord
-    request_handler: SmallWebRTCRequestHandler
+    request_handler: Any
     task: Any = None
     runner: Any = None
     runner_task: asyncio.Task | None = None
@@ -132,6 +123,8 @@ class SessionManager:
         )
 
     async def handle_offer(self, session_id: str, request: SmallWebRTCOfferRequest) -> SmallWebRTCOfferResponse:
+        from pipecat.transports.smallwebrtc.request_handler import SmallWebRTCRequest
+
         realtime = self._require_session(session_id)
         log_diagnostic(
             logger,
@@ -238,6 +231,8 @@ class SessionManager:
                     on_tts_timeout=_noop_fallback,
                     on_disconnect_expired=_noop_async,
                 )
+            from app.orchestrator.pipeline import build_session_task
+
             transport, task, runner, observer = build_session_task(
                 settings=self._settings,
                 providers=self._providers.build(),
@@ -348,6 +343,8 @@ class SessionManager:
         )
 
     async def handle_patch(self, session_id: str, request: SmallWebRTCPatchRequestModel) -> None:
+        from pipecat.transports.smallwebrtc.request_handler import SmallWebRTCPatchRequest
+
         realtime = self._require_session(session_id)
         log_diagnostic(
             logger,
@@ -366,6 +363,8 @@ class SessionManager:
         )
 
     async def end_session(self, session_id: str) -> SessionRecord:
+        from pipecat.frames.frames import EndFrame
+
         realtime = self._require_session(session_id)
         self._cancel_inbound_audio_watchdog(realtime)
         if realtime.observer:
@@ -472,7 +471,12 @@ class SessionManager:
                 )
             )
 
-    def _build_request_handler(self) -> SmallWebRTCRequestHandler:
+    def _build_request_handler(self) -> Any:
+        from pipecat.transports.smallwebrtc.request_handler import (
+            ConnectionMode,
+            SmallWebRTCRequestHandler,
+        )
+
         return SmallWebRTCRequestHandler(
             ice_servers=self._settings.smallwebrtc_ice_servers,
             connection_mode=ConnectionMode.SINGLE,

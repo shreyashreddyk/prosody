@@ -31,7 +31,6 @@ from app.providers.factory import ProviderBundle
 from app.resilience import SessionResilienceCoordinator
 from app.storage.base import SessionStore
 from app.storage.local_store import iso_now
-from app.transports.local_webrtc import build_smallwebrtc_transport
 from app.webrtc_diagnostics import summarize_connection_state
 
 logger = logging.getLogger(__name__)
@@ -285,6 +284,8 @@ def build_session_task(
     on_transport_disconnected=None,
     on_first_user_audio=None,
 ):
+    from app.transports.local_webrtc import build_smallwebrtc_transport
+
     latency = LatencyRecorder(store, conversation_id, session_id)
     if session_started_at:
         latency.seed_session_start(session_started_at)
