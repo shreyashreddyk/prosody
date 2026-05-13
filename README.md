@@ -99,6 +99,15 @@ GitHub Actions runs `.github/workflows/ci.yml` on every pull request and push. T
 
 The Docker smoke checks only build local CI tags; they do not push images, deploy to Cloud Run, or require production secrets. Docs-only changes skip the Docker smoke job, while the web and agent validation jobs still run.
 
+## Continuous Deployment
+
+Production Cloud Run deployment is manual and environment-gated:
+
+- `.github/workflows/deploy-web.yml` builds and pushes `prosody-web`, then deploys the configured web Cloud Run service.
+- `.github/workflows/deploy-agent.yml` builds and pushes `prosody-agent`, then deploys the configured agent Cloud Run service with Secret Manager-backed runtime secrets.
+
+Both workflows use GitHub Actions Workload Identity Federation to Google Cloud and the GitHub `production` Environment. Configure the required Environment variables, Secret Manager references, and Cloud Run resources in `infra/cloudrun/README.md` before first deploy. The workflows keep `VITE_ENABLE_LIVE_VOICE=0` and `ENABLE_LOCAL_SMALLWEBRTC=0` for production unless a future deployed realtime transport replaces the local-only path.
+
 ## Notes
 
 - The docs under `docs/` are local-only and intentionally ignored by Git.

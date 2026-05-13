@@ -1,0 +1,120 @@
+name: Deploy web to Cloud Run
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-web-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy prosody-web
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      image: ${{ steps.config.outputs.image }}
+      url: ${{ steps.deploy.outputs.url }}
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      GCP_ARTIFACT_REPOSITORY: ${{ vars.GCP_ARTIFACT_REPOSITORY }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      CLOUD_RUN_WEB_SERVICE: ${{ vars.CLOUD_RUN_WEB_SERVICE }}
+      VITE_AGENT_BASE_URL: ${{ vars.VITE_AGENT_BASE_URL }}
+      VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+      VITE_ENABLE_LIVE_VOICE: ${{ vars.VITE_ENABLE_LIVE_VOICE }}
+      VITE_ENABLE_UI_DEMO_TOOLS: ${{ vars.VITE_ENABLE_UI_DEMO_TOOLS }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure deployment values
+        id: config
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required_vars=(
+            GCP_PROJECT_ID
+            GCP_REGION
+            GCP_ARTIFACT_REPOSITORY
+            GCP_WORKLOAD_IDENTITY_PROVIDER
+            GCP_SERVICE_ACCOUNT
+            CLOUD_RUN_WEB_SERVICE
+            VITE_AGENT_BASE_URL
+            VITE_SUPABASE_URL
+            VITE_SUPABASE_ANON_KEY
+          )
+
+          for name in "${required_vars[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing required GitHub Environment variable: ${name}"
+              exit 1
+            fi
+          done
+
+          image="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REPOSITORY}/prosody-web:${GITHUB_SHA}"
+          vite_enable_live_voice="${VITE_ENABLE_LIVE_VOICE:-0}"
+          vite_enable_ui_demo_tools="${VITE_ENABLE_UI_DEMO_TOOLS:-0}"
+
+          echo "VITE_ENABLE_LIVE_VOICE=${vite_enable_live_voice}" >> "$GITHUB_ENV"
+          echo "VITE_ENABLE_UI_DEMO_TOOLS=${vite_enable_ui_demo_tools}" >> "$GITHUB_ENV"
+          echo "IMAGE=${image}" >> "$GITHUB_ENV"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build web image
+        run: |
+          docker build \
+            -f apps/web/Dockerfile \
+            -t "$IMAGE" \
+            --build-arg "VITE_AGENT_BASE_URL=${VITE_AGENT_BASE_URL}" \
+            --build-arg "VITE_ENABLE_LIVE_VOICE=${VITE_ENABLE_LIVE_VOICE}" \
+            --build-arg "VITE_ENABLE_UI_DEMO_TOOLS=${VITE_ENABLE_UI_DEMO_TOOLS}" \
+            --build-arg "VITE_SUPABASE_URL=${VITE_SUPABASE_URL}" \
+            --build-arg "VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}" \
+            .
+
+      - name: Push web image
+        run: docker push "$IMAGE"
+
+      - name: Deploy web service
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          region: ${{ env.GCP_REGION }}
+          service: ${{ env.CLOUD_RUN_WEB_SERVICE }}
+          image: ${{ steps.config.outputs.image }}
+          flags: --port=8080
+
+      - name: Report deployment
+        run: |
+          echo "Deployed ${CLOUD_RUN_WEB_SERVICE} as ${IMAGE}"
+          echo "Cloud Run URL: ${{ steps.deploy.outputs.url }}"
+          {
+            echo "## prosody-web deployment"
+            echo ""
+            echo "- Service: \`${CLOUD_RUN_WEB_SERVICE}\`"
+            echo "- Image: \`${IMAGE}\`"
+            echo "- URL: ${{ steps.deploy.outputs.url }}"
+          } >> "$GITHUB_STEP_SUMMARY"

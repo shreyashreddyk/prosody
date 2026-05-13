@@ -1,0 +1,148 @@
+name: Deploy agent to Cloud Run
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-agent-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy prosody-agent
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      image: ${{ steps.config.outputs.image }}
+      url: ${{ steps.deploy.outputs.url }}
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      GCP_ARTIFACT_REPOSITORY: ${{ vars.GCP_ARTIFACT_REPOSITORY }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      CLOUD_RUN_AGENT_SERVICE: ${{ vars.CLOUD_RUN_AGENT_SERVICE }}
+      WEB_ALLOWED_ORIGINS: ${{ vars.WEB_ALLOWED_ORIGINS }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      AGENT_LOG_LEVEL: ${{ vars.AGENT_LOG_LEVEL }}
+      LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+      LLM_MODEL: ${{ vars.LLM_MODEL }}
+      GCP_SECRET_SUPABASE_SERVICE_ROLE_KEY: ${{ vars.GCP_SECRET_SUPABASE_SERVICE_ROLE_KEY }}
+      GCP_SECRET_SUPABASE_JWT_SECRET: ${{ vars.GCP_SECRET_SUPABASE_JWT_SECRET }}
+      GCP_SECRET_OPENAI_API_KEY: ${{ vars.GCP_SECRET_OPENAI_API_KEY }}
+      GCP_SECRET_DEEPGRAM_API_KEY: ${{ vars.GCP_SECRET_DEEPGRAM_API_KEY }}
+      GCP_SECRET_ELEVENLABS_API_KEY: ${{ vars.GCP_SECRET_ELEVENLABS_API_KEY }}
+      GCP_SECRET_ELEVENLABS_VOICE_ID: ${{ vars.GCP_SECRET_ELEVENLABS_VOICE_ID }}
+      GCP_SECRET_DAILY_API_KEY: ${{ vars.GCP_SECRET_DAILY_API_KEY }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure deployment values
+        id: config
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required_vars=(
+            GCP_PROJECT_ID
+            GCP_REGION
+            GCP_ARTIFACT_REPOSITORY
+            GCP_WORKLOAD_IDENTITY_PROVIDER
+            GCP_SERVICE_ACCOUNT
+            CLOUD_RUN_AGENT_SERVICE
+            WEB_ALLOWED_ORIGINS
+            SUPABASE_URL
+            GCP_SECRET_SUPABASE_SERVICE_ROLE_KEY
+            GCP_SECRET_SUPABASE_JWT_SECRET
+            GCP_SECRET_OPENAI_API_KEY
+            GCP_SECRET_DEEPGRAM_API_KEY
+            GCP_SECRET_ELEVENLABS_API_KEY
+            GCP_SECRET_ELEVENLABS_VOICE_ID
+            GCP_SECRET_DAILY_API_KEY
+          )
+
+          for name in "${required_vars[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing required GitHub Environment variable: ${name}"
+              exit 1
+            fi
+          done
+
+          image="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REPOSITORY}/prosody-agent:${GITHUB_SHA}"
+          agent_log_level="${AGENT_LOG_LEVEL:-INFO}"
+          enable_local_smallwebrtc="0"
+          llm_provider="${LLM_PROVIDER:-openai}"
+          llm_model="${LLM_MODEL:-gpt-5-nano}"
+
+          echo "AGENT_LOG_LEVEL=${agent_log_level}" >> "$GITHUB_ENV"
+          echo "ENABLE_LOCAL_SMALLWEBRTC=${enable_local_smallwebrtc}" >> "$GITHUB_ENV"
+          echo "LLM_PROVIDER=${llm_provider}" >> "$GITHUB_ENV"
+          echo "LLM_MODEL=${llm_model}" >> "$GITHUB_ENV"
+          echo "IMAGE=${image}" >> "$GITHUB_ENV"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "agent_log_level=${agent_log_level}" >> "$GITHUB_OUTPUT"
+          echo "enable_local_smallwebrtc=${enable_local_smallwebrtc}" >> "$GITHUB_OUTPUT"
+          echo "llm_provider=${llm_provider}" >> "$GITHUB_OUTPUT"
+          echo "llm_model=${llm_model}" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build agent image
+        run: docker build -f apps/agent/Dockerfile -t "$IMAGE" .
+
+      - name: Push agent image
+        run: docker push "$IMAGE"
+
+      - name: Deploy agent service
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          region: ${{ env.GCP_REGION }}
+          service: ${{ env.CLOUD_RUN_AGENT_SERVICE }}
+          image: ${{ steps.config.outputs.image }}
+          env_vars: |-
+            AGENT_LOG_LEVEL=${{ steps.config.outputs.agent_log_level }}
+            ENABLE_LOCAL_SMALLWEBRTC=${{ steps.config.outputs.enable_local_smallwebrtc }}
+            WEB_ALLOWED_ORIGINS="${{ env.WEB_ALLOWED_ORIGINS }}"
+            SUPABASE_URL=${{ env.SUPABASE_URL }}
+            LLM_PROVIDER=${{ steps.config.outputs.llm_provider }}
+            LLM_MODEL=${{ steps.config.outputs.llm_model }}
+          secrets: |-
+            SUPABASE_SERVICE_ROLE_KEY=${{ env.GCP_SECRET_SUPABASE_SERVICE_ROLE_KEY }}
+            SUPABASE_JWT_SECRET=${{ env.GCP_SECRET_SUPABASE_JWT_SECRET }}
+            OPENAI_API_KEY=${{ env.GCP_SECRET_OPENAI_API_KEY }}
+            DEEPGRAM_API_KEY=${{ env.GCP_SECRET_DEEPGRAM_API_KEY }}
+            ELEVENLABS_API_KEY=${{ env.GCP_SECRET_ELEVENLABS_API_KEY }}
+            ELEVENLABS_VOICE_ID=${{ env.GCP_SECRET_ELEVENLABS_VOICE_ID }}
+            DAILY_API_KEY=${{ env.GCP_SECRET_DAILY_API_KEY }}
+          flags: --port=8080
+
+      - name: Report deployment
+        run: |
+          echo "Deployed ${CLOUD_RUN_AGENT_SERVICE} as ${IMAGE}"
+          echo "Cloud Run URL: ${{ steps.deploy.outputs.url }}"
+          {
+            echo "## prosody-agent deployment"
+            echo ""
+            echo "- Service: \`${CLOUD_RUN_AGENT_SERVICE}\`"
+            echo "- Image: \`${IMAGE}\`"
+            echo "- URL: ${{ steps.deploy.outputs.url }}"
+            echo "- Local SmallWebRTC enabled: \`${ENABLE_LOCAL_SMALLWEBRTC}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
