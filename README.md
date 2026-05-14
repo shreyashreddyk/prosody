@@ -1,115 +1,301 @@
 # Prosody
 
-Prosody is a production-style AI interview and presentation coaching workspace. The current deployable surface focuses on authentication, persistent conversations, source uploads, transcript history, summaries, flashcards, metrics, and health/meta endpoints.
+Prosody is a deployed, production-minded AI coaching workspace for interview and presentation practice. It combines an authenticated React product shell with a FastAPI agent service, Supabase-backed persistence, source uploads, transcript history, summaries, flashcards, metrics, and Cloud Run deployment automation.
 
-The repo also includes a local-only experimental realtime voice loop built around Pipecat and `SmallWebRTCTransport`. That path is preserved for local development and diagnostics, but it is feature-gated off by default so Cloud Run deployments do not expose the local transport as a public production feature. Realtime voice remains experimental until `DailyTransport` or an equivalent production transport is integrated.
+The current public production surface is intentionally scoped and honest: the durable workspace, uploads, history, generation, metrics, and operational endpoints are deployable today. The local Pipecat `SmallWebRTCTransport` voice loop is preserved for development and diagnostics, but it is not exposed as the public production transport.
+
+## Product Preview
+
+![Prosody product landing page](artifacts/readme/prosody-product-landing.png)
+
+Prosody is built around persistent coaching workspaces. A **Conversation** is the long-lived notebook; a **Session** is one live call inside that conversation; a **Turn** is one user utterance plus one assistant response; a **Source** is an uploaded context asset such as a resume, job description, notes, or presentation material.
+
+## Current Production Surface
+
+- Authenticated web app with Supabase Auth and Google OAuth.
+- Persistent conversations, session history, transcript turns, source metadata, summaries, flashcards, degradation events, and latency metrics in Supabase Postgres.
+- Browser source uploads to Supabase Storage using the private `conversation-sources` bucket pattern.
+- FastAPI agent endpoints for health, readiness, metadata, summaries, flashcards, and authenticated session/debug reads.
+- Cloud Run deployment split into separate web and agent services.
+- GitHub Actions CI for JS workspaces, Python agent checks, tests, and path-filtered Docker smoke builds.
+- Manual production CD through GitHub Actions, GitHub Environments, Workload Identity Federation, Artifact Registry, Cloud Run, and Secret Manager.
+
+## Architecture
+
+```text
+Browser
+  |
+  | serves static app / calls APIs with Supabase bearer token
+  v
+prosody-web (Cloud Run, nginx + Vite/React)
+  |
+  +--> Supabase Auth (Google OAuth, browser anon key)
+  +--> Supabase Postgres (conversations, sessions, turns, summaries, flashcards, metrics)
+  +--> Supabase Storage (conversation source uploads)
+  |
+  +--> prosody-agent (Cloud Run, FastAPI + uvicorn)
+         |
+         +--> Supabase JWT validation and service-role persistence
+         +--> OpenAI-backed summary and flashcard generation
+         +--> health/readiness/meta endpoints
+         +--> gated local/dev SmallWebRTC lifecycle routes
+```
+
+### Deployed Service Split
+
+- `prosody-web`: React + Vite + TypeScript app built into static assets and served by nginx with SPA fallback. Vite `VITE_*` values are baked into the image at build time.
+- `prosody-agent`: Python 3.12 FastAPI service running on Cloud Run's `$PORT` through uvicorn. It owns server-only provider credentials, Supabase service-role access, authenticated generation APIs, readiness checks, and the gated local realtime session surface.
+
+![Cloud Run services for web and agent](artifacts/readme/cloud-run-services.png)
 
 ## Stack
 
-- Frontend: React + Vite + TypeScript
-- Backend: Python + FastAPI + Pipecat-ready module boundaries
-- Local transport target: `SmallWebRTCTransport`
-- Deployed transport target: `DailyTransport`
-- ASR: Deepgram Flux
-- TTS: ElevenLabs streaming
+- Frontend: React, Vite, TypeScript
+- Backend: Python, FastAPI, Pipecat-ready module boundaries
 - Auth: Supabase Auth with Google OAuth
 - Database: Supabase Postgres
 - Storage: Supabase Storage
-- Deployment target: Cloud Run
+- Generation: OpenAI for summaries and flashcards
+- Local realtime target: Pipecat `SmallWebRTCTransport`
+- Deployed realtime target: `DailyTransport` or equivalent future production transport
+- Deployment: Google Cloud Run, Artifact Registry, Secret Manager
+- CI/CD: GitHub Actions with Workload Identity Federation
 
-## Monorepo Layout
+## Realtime Transport Status
 
-- `apps/web`: authenticated React product shell with conversations, sources, history, summaries, flashcards, metrics, and gated live voice controls
-- `apps/agent`: FastAPI service with health/meta endpoints, authenticated product generation APIs, Supabase-backed persistence, and gated local realtime routes
-- `packages/contracts`: shared TypeScript contracts for core product entities and events
-- `packages/ui`: minimal shared UI primitives used by the web app
-- `infra`: deployment/provider notes and future infrastructure assets
-- `docs`: local-only learning trail and design notes (gitignored)
+Realtime voice is deliberately feature-gated in this release.
 
-## Current Deployment Posture
+- Local/dev voice path: Pipecat `SmallWebRTCTransport`, Deepgram Flux STT, OpenAI LLM, and ElevenLabs streaming TTS.
+- Production Cloud Run posture: voice controls remain hidden when `VITE_ENABLE_LIVE_VOICE=0`, and agent local realtime mutation/signaling routes reject calls when `ENABLE_LOCAL_SMALLWEBRTC=0`.
+- Known limitation: the current local `SmallWebRTCTransport` voice path is not the public production transport. It should not be presented as the deployed realtime experience until `DailyTransport` or another production-ready transport is integrated.
 
-- Productionized surface: Supabase Auth, persistent conversations, source uploads, session/turn history, summaries, flashcards, metrics/timeline reads, and agent health/meta endpoints
-- Local/dev-only surface: Pipecat `SmallWebRTCTransport` session creation, offer/ICE signaling, resume, and end routes
-- The browser hides live voice controls unless `VITE_ENABLE_LIVE_VOICE=1` or `true`
-- The agent rejects local SmallWebRTC lifecycle/signaling calls unless `ENABLE_LOCAL_SMALLWEBRTC=1` or `true`
-- Cloud Run deployments should omit both realtime flags, or set them to `0`, until the deployed realtime transport is implemented
+The deployed app can still support login, uploads, persistent workspaces, transcript/history review, summaries, flashcards, metrics reads, health checks, and metadata checks while voice is disabled.
 
-## Local Run
+## Repository Layout
 
-1. Install Node dependencies:
+- `apps/web`: authenticated React product shell with conversations, sessions, sources, history, summaries, flashcards, metrics, and gated live voice controls
+- `apps/agent`: FastAPI service with health/meta endpoints, authenticated generation APIs, Supabase-backed persistence, and gated local realtime routes
+- `packages/contracts`: shared TypeScript contracts for product entities and realtime events
+- `packages/ui`: shared React presentation primitives
+- `infra/cloudrun`: Cloud Run build, deploy, environment, rollback, and operations notes
+- `infra/supabase`: Supabase schema, migration, and storage notes
+- `docs`: local-only learning trail and decision record; intentionally ignored by Git
+- `artifacts/readme`: committed portfolio artifacts referenced by this README
+
+## Local Development
+
+Install JS dependencies:
 
 ```bash
 npm install
 ```
 
-2. Start the web app:
+Start the web app:
 
 ```bash
 npm run dev:web
 ```
 
-3. Create a Python virtual environment and install the agent package:
+Create a Python virtual environment and install the agent package:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e apps/agent
 ```
 
-4. Enable local realtime flags in `apps/web/.env.local` and `apps/agent/.env` if you want to use the experimental SmallWebRTC path:
-
-```bash
-VITE_ENABLE_LIVE_VOICE=1
-ENABLE_LOCAL_SMALLWEBRTC=1
-```
-
-5. Start the agent:
+Start the agent:
 
 ```bash
 npm run dev:agent
 ```
 
-## Environment Files
+To exercise the local realtime voice path, explicitly enable both sides in local env files only:
 
-- `apps/agent/.env`: server-only runtime settings and secrets
-- `apps/web/.env.local`: browser-visible `VITE_*` settings only
-- `apps/agent/.env.example` and `apps/web/.env.example` document the expected layout
+```bash
+# apps/web/.env.local
+VITE_ENABLE_LIVE_VOICE=1
 
-Keep Supabase anon and agent base URL in the web env. Keep OpenAI, Deepgram, ElevenLabs, Daily, and Supabase service-role secrets in the agent env only.
+# apps/agent/.env
+ENABLE_LOCAL_SMALLWEBRTC=1
+```
 
-Production-safe realtime defaults are deny-by-default. `VITE_ENABLE_LIVE_VOICE` and `ENABLE_LOCAL_SMALLWEBRTC` must be explicitly enabled for local development; they should remain disabled in Cloud Run until `DailyTransport` or another production transport replaces the local path.
+Production Cloud Run deployments should leave both flags unset or set to `0`.
 
-## Validation
+## Environment Boundaries
 
-- `npm run typecheck`
-- `npm run build`
-- `npm run test --workspace @prosody/web --if-present`
-- `python3 -m compileall apps/agent/app`
-- `python3 -m pytest apps/agent/tests`
+- Web env: `apps/web/.env.local` for browser-visible `VITE_*` values only.
+- Agent env: `apps/agent/.env` for server runtime settings and secrets.
+- Cloud Run web build args: `VITE_AGENT_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_ENABLE_LIVE_VOICE`, and `VITE_ENABLE_UI_DEMO_TOOLS`.
+- Cloud Run agent runtime env: `WEB_ALLOWED_ORIGINS`, `SUPABASE_URL`, `AGENT_LOG_LEVEL`, `LLM_PROVIDER`, `LLM_MODEL`, and `ENABLE_LOCAL_SMALLWEBRTC`.
+- Cloud Run agent secrets: Supabase service-role/JWT credentials and provider keys are supplied through Google Secret Manager references.
 
-## Continuous Integration
+The Supabase anon key is browser-safe by design. Supabase service-role keys, JWT secrets, OpenAI, Deepgram, ElevenLabs, and Daily credentials stay server-only.
 
-GitHub Actions runs `.github/workflows/ci.yml` on every pull request and push. The workflow:
+## Health And Readiness
 
-- installs npm workspace dependencies with `npm ci`
+The web container exposes a simple static-server health endpoint:
+
+```bash
+curl -i https://<web-service>/healthz
+```
+
+The agent exposes:
+
+```bash
+curl -i https://<agent-service>/health/live
+curl -i https://<agent-service>/health/ready
+curl -i https://<agent-service>/meta
+```
+
+Expected production metadata includes:
+
+```json
+{
+  "local_smallwebrtc_enabled": false,
+  "realtime_status": "production_realtime_disabled"
+}
+```
+
+`/health/live` verifies the process is alive. `/health/ready` reports `ok` when Supabase is either not configured or both JWKS and REST checks are reachable; it reports `degraded` when Supabase is configured but unreachable. `/meta` exposes provider configuration state, Supabase connectivity state, intended local/deployed transports, and the active realtime posture.
+
+## CI/CD
+
+### Continuous Integration
+
+`.github/workflows/ci.yml` runs on pull requests and pushes. It:
+
+- installs npm workspace dependencies with Node 20 and `npm ci`
 - typechecks and builds all JS workspaces
-- runs the web Vitest suite when the web test script is present
+- runs the web Vitest suite when present
 - installs the Python agent package with Python 3.12
-- compiles the agent package and runs pytest when agent tests are present
+- compiles `apps/agent/app`
+- runs agent pytest tests when present
 - smoke-builds the web and agent Docker images when Docker-relevant paths change
 
-The Docker smoke checks only build local CI tags; they do not push images, deploy to Cloud Run, or require production secrets. Docs-only changes skip the Docker smoke job, while the web and agent validation jobs still run.
+Docker smoke builds validate image construction with safe placeholder web build args. They do not publish images, deploy services, or require production secrets.
 
-## Continuous Deployment
+### Continuous Deployment
 
-Production Cloud Run deployment is manual and environment-gated:
+Production deployment is manual and environment-gated:
 
 - `.github/workflows/deploy-web.yml` builds and pushes `prosody-web`, then deploys the configured web Cloud Run service.
 - `.github/workflows/deploy-agent.yml` builds and pushes `prosody-agent`, then deploys the configured agent Cloud Run service with Secret Manager-backed runtime secrets.
 
-Both workflows use GitHub Actions Workload Identity Federation to Google Cloud and the GitHub `production` Environment. Configure the required Environment variables, Secret Manager references, and Cloud Run resources in `infra/cloudrun/README.md` before first deploy. The workflows keep `VITE_ENABLE_LIVE_VOICE=0` and `ENABLE_LOCAL_SMALLWEBRTC=0` for production unless a future deployed realtime transport replaces the local-only path.
+Both workflows use GitHub Actions Workload Identity Federation for Google Cloud auth and the GitHub `production` Environment for deliberate release control. The detailed setup, one-time GCP resources, GitHub Environment variables, bootstrap ordering, rollback commands, and Cloud Run gotchas live in [infra/cloudrun/README.md](infra/cloudrun/README.md).
 
-## Notes
+The first production bootstrap has a URL dependency loop: the web image needs the agent URL at build time, and the agent needs the final web origin for CORS. Deploy the agent with a temporary origin, deploy the web with the agent URL, then redeploy the agent with the final web origin in `WEB_ALLOWED_ORIGINS`.
 
-- The docs under `docs/` are local-only and intentionally ignored by Git.
-- The deployable product surface is productionized around auth, persistence, uploads, history, summaries, flashcards, metrics, and health/meta.
-- Realtime voice is intentionally local/dev only in this version. Do not present the current `SmallWebRTCTransport` path as the public production experience.
+## Operational Runbook
+
+### Verify Health
+
+1. Check the web static server:
+
+```bash
+curl -i https://<web-service>/healthz
+```
+
+2. Check the agent process:
+
+```bash
+curl -i https://<agent-service>/health/live
+```
+
+3. Check agent readiness:
+
+```bash
+curl -i https://<agent-service>/health/ready
+```
+
+4. Check the production realtime posture:
+
+```bash
+curl -i https://<agent-service>/meta
+```
+
+For Cloud Run, `/meta` should show `local_smallwebrtc_enabled: false` and `realtime_status: "production_realtime_disabled"`.
+
+### Verify Supabase Connectivity
+
+Use `/health/ready` and `/meta` together.
+
+- `ready.status = "ok"`: the agent can reach the required Supabase checks, or Supabase is intentionally not configured for that environment.
+- `ready.status = "degraded"` with Supabase configured: check `SUPABASE_URL`, Secret Manager references, enabled secret versions, runtime service account access, Supabase JWKS reachability, and Supabase PostgREST reachability.
+- `/meta.supabase.jwks_reachable` and `/meta.supabase.rest_reachable` help distinguish auth-key discovery from database API connectivity.
+
+### Verify CORS Config
+
+The browser calls the agent directly, so `WEB_ALLOWED_ORIGINS` must exactly include the deployed web origin.
+
+```bash
+curl -i \
+  -X OPTIONS \
+  -H "Origin: https://<web-service>" \
+  -H "Access-Control-Request-Method: POST" \
+  https://<agent-service>/api/conversations/<conversation-id>/summary
+```
+
+If login and uploads work but agent calls fail in the browser, check Cloud Run `WEB_ALLOWED_ORIGINS`, rebuild/redeploy ordering, and whether the web image was built with the intended `VITE_AGENT_BASE_URL`.
+
+### When Login And Uploads Work But Voice Is Disabled
+
+That can be the correct production posture. Check:
+
+- `VITE_ENABLE_LIVE_VOICE` in the web build. Production should be `0`.
+- `ENABLE_LOCAL_SMALLWEBRTC` in the agent runtime env. Production should be `0`.
+- `/meta.realtime_status`. Production should be `production_realtime_disabled`.
+- Whether the user is expecting local/dev voice instead of the deployed product. Local voice requires both flags set to `1` and local provider credentials.
+- Whether future production voice work has integrated `DailyTransport`; until then, do not enable the local SmallWebRTC path for public Cloud Run traffic.
+
+### Cloud Run Startup Triage
+
+If Cloud Run reports that a container failed to listen on `$PORT`, inspect revision logs before assuming a port issue:
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="<service-name>"' \
+  --project "<project-id>" \
+  --limit 100 \
+  --format='table(timestamp,severity,textPayload)'
+```
+
+Past production hardening found that disabled local realtime imports could still load native WebRTC/OpenCV dependencies during agent startup. The agent now lazy-loads local realtime modules so the production-disabled path does not block Cloud Run startup.
+
+## Validation
+
+Useful local checks:
+
+```bash
+npm run typecheck
+npm run build
+npm run test --workspace @prosody/web --if-present
+python3 -m compileall apps/agent/app
+python3 -m pytest apps/agent/tests
+```
+
+Useful deployment checks:
+
+```bash
+curl -i https://<web-service>/healthz
+curl -i https://<agent-service>/health/live
+curl -i https://<agent-service>/health/ready
+curl -i https://<agent-service>/meta
+```
+
+Do not treat these commands as evidence of a fresh deployment unless they are run against the deployed Cloud Run services for the specific revision being evaluated.
+
+## Productionization Surface
+
+Prosody now demonstrates more than a local prototype:
+
+- deployable Cloud Run containers for web and agent
+- environment-separated browser and server configuration
+- Supabase Auth, Postgres, and Storage integration
+- server-side JWT validation and service-role persistence boundary
+- source-grounded summary and flashcard generation
+- latency, timeline, degradation, and replay-oriented data model
+- CI validation across TypeScript, Python, tests, and Docker image buildability
+- manual production CD with Workload Identity Federation and Secret Manager
+- operational runbook for health, Supabase readiness, CORS, voice gating, and Cloud Run startup triage
+
+The key known limitation is also explicit: public production realtime voice is not enabled in this release. The current local SmallWebRTC path remains a development and diagnostics asset until a production transport such as DailyTransport is integrated.
