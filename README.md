@@ -7,6 +7,7 @@
 <p align="center">
   <a href="#product-preview"><img alt="Product Preview" src="https://img.shields.io/badge/Product-Preview-5B8CFF?style=for-the-badge"></a>
   <a href="#architecture"><img alt="Architecture" src="https://img.shields.io/badge/System-Architecture-55D6BE?style=for-the-badge"></a>
+  <a href="#persistence-model"><img alt="Persistence Model" src="https://img.shields.io/badge/Supabase-Persistence-3FCF8E?style=for-the-badge&logo=supabase&logoColor=white"></a>
   <a href="#cicd"><img alt="CI/CD" src="https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white"></a>
   <a href="#operational-runbook"><img alt="Runbook" src="https://img.shields.io/badge/Ops-Runbook-111827?style=for-the-badge"></a>
   <a href="infra/cloudrun/README.md"><img alt="Deployment Guide" src="https://img.shields.io/badge/Deploy-Cloud%20Run-4285F4?style=for-the-badge&logo=googlecloud&logoColor=white"></a>
@@ -70,6 +71,14 @@ prosody-web (Cloud Run, nginx + Vite/React)
 - `prosody-agent`: Python 3.12 FastAPI service running on Cloud Run's `$PORT` through uvicorn. It owns server-only provider credentials, Supabase service-role access, authenticated generation APIs, readiness checks, and the gated local realtime session surface.
 
 ![Cloud Run services for web and agent](artifacts/readme/cloud-run-services.png)
+
+## Persistence Model
+
+![Supabase schema architecture for Prosody](artifacts/readme/supabase-schema-architecture.png)
+
+This schema view is worth including because it makes the product's persistence layer concrete. Prosody is not just a stateless prompt demo: conversations, sessions, turns, sources, summaries, flashcards, latency events, degradation events, and profiles are modeled as durable records tied back to Supabase Auth users. That structure supports resumable workspaces, source-grounded coaching artifacts, user-scoped data isolation, and observability/replay workflows that can be inspected after a session ends.
+
+The important design signal is ownership and traceability. User-facing objects flow from `profiles` and `conversations` into session history, uploaded sources, generated study artifacts, and timing/degradation telemetry, while the agent service uses server-side Supabase access only after validating the user's bearer token and checking conversation/session ownership.
 
 ## Stack
 
