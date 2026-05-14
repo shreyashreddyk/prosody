@@ -70,8 +70,6 @@ prosody-web (Cloud Run, nginx + Vite/React)
 - `prosody-web`: React + Vite + TypeScript app built into static assets and served by nginx with SPA fallback. Vite `VITE_*` values are baked into the image at build time.
 - `prosody-agent`: Python 3.12 FastAPI service running on Cloud Run's `$PORT` through uvicorn. It owns server-only provider credentials, Supabase service-role access, authenticated generation APIs, readiness checks, and the gated local realtime session surface.
 
-![Cloud Run services for web and agent](artifacts/readme/cloud-run-services.png)
-
 ## Persistence Model
 
 ![Supabase schema architecture for Prosody](artifacts/readme/supabase-schema-architecture.png)
@@ -218,6 +216,14 @@ Production deployment is manual and environment-gated:
 Both workflows use GitHub Actions Workload Identity Federation for Google Cloud auth and the GitHub `production` Environment for deliberate release control. The detailed setup, one-time GCP resources, GitHub Environment variables, bootstrap ordering, rollback commands, and Cloud Run gotchas live in [infra/cloudrun/README.md](infra/cloudrun/README.md).
 
 The first production bootstrap has a URL dependency loop: the web image needs the agent URL at build time, and the agent needs the final web origin for CORS. Deploy the agent with a temporary origin, deploy the web with the agent URL, then redeploy the agent with the final web origin in `WEB_ALLOWED_ORIGINS`.
+
+### Deployment Evidence
+
+These screenshots are included deliberately as lightweight release evidence. They help a reviewer see that Prosody has moved beyond local-only scaffolding into separate Cloud Run services and a checked GitHub Actions workflow, without claiming a fresh live health check for the current revision.
+
+![Cloud Run services for web and agent](artifacts/readme/cloud-run-services.png)
+
+![GitHub Actions checks passing for Prosody](artifacts/readme/github-actions-checks.png)
 
 ## Operational Runbook
 
