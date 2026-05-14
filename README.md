@@ -1,5 +1,28 @@
 # Prosody
 
+<p align="center">
+  <strong>Production-minded AI interview and presentation coaching workspace</strong>
+</p>
+
+<p align="center">
+  <a href="#product-preview"><img alt="Product Preview" src="https://img.shields.io/badge/Product-Preview-5B8CFF?style=for-the-badge"></a>
+  <a href="#architecture"><img alt="Architecture" src="https://img.shields.io/badge/System-Architecture-55D6BE?style=for-the-badge"></a>
+  <a href="#cicd"><img alt="CI/CD" src="https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white"></a>
+  <a href="#operational-runbook"><img alt="Runbook" src="https://img.shields.io/badge/Ops-Runbook-111827?style=for-the-badge"></a>
+  <a href="infra/cloudrun/README.md"><img alt="Deployment Guide" src="https://img.shields.io/badge/Deploy-Cloud%20Run-4285F4?style=for-the-badge&logo=googlecloud&logoColor=white"></a>
+</p>
+
+<p align="center">
+  <img alt="React" src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=111827">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white">
+  <img alt="Vite" src="https://img.shields.io/badge/Vite-5-646CFF?style=flat-square&logo=vite&logoColor=white">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-Python-009688?style=flat-square&logo=fastapi&logoColor=white">
+  <img alt="Supabase" src="https://img.shields.io/badge/Supabase-Auth%20%2B%20Postgres%20%2B%20Storage-3FCF8E?style=flat-square&logo=supabase&logoColor=white">
+  <img alt="Google Cloud Run" src="https://img.shields.io/badge/Cloud%20Run-Deployed-4285F4?style=flat-square&logo=googlecloud&logoColor=white">
+  <img alt="OpenAI" src="https://img.shields.io/badge/OpenAI-Generation-412991?style=flat-square&logo=openai&logoColor=white">
+  <img alt="Pipecat" src="https://img.shields.io/badge/Pipecat-Realtime%20Dev-111827?style=flat-square">
+</p>
+
 Prosody is a deployed, production-minded AI coaching workspace for interview and presentation practice. It combines an authenticated React product shell with a FastAPI agent service, Supabase-backed persistence, source uploads, transcript history, summaries, flashcards, metrics, and Cloud Run deployment automation.
 
 The current public production surface is intentionally scoped and honest: the durable workspace, uploads, history, generation, metrics, and operational endpoints are deployable today. The local Pipecat `SmallWebRTCTransport` voice loop is preserved for development and diagnostics, but it is not exposed as the public production transport.
@@ -50,16 +73,18 @@ prosody-web (Cloud Run, nginx + Vite/React)
 
 ## Stack
 
-- Frontend: React, Vite, TypeScript
-- Backend: Python, FastAPI, Pipecat-ready module boundaries
-- Auth: Supabase Auth with Google OAuth
-- Database: Supabase Postgres
-- Storage: Supabase Storage
-- Generation: OpenAI for summaries and flashcards
-- Local realtime target: Pipecat `SmallWebRTCTransport`
-- Deployed realtime target: `DailyTransport` or equivalent future production transport
-- Deployment: Google Cloud Run, Artifact Registry, Secret Manager
-- CI/CD: GitHub Actions with Workload Identity Federation
+| Layer | Technology |
+| --- | --- |
+| Frontend | React, Vite, TypeScript |
+| Backend | Python, FastAPI, Pipecat-ready module boundaries |
+| Auth | Supabase Auth with Google OAuth |
+| Persistence | Supabase Postgres |
+| File storage | Supabase Storage |
+| Generation | OpenAI for summaries and flashcards |
+| Local realtime | Pipecat `SmallWebRTCTransport` |
+| Future deployed realtime | `DailyTransport` or equivalent production transport |
+| Deployment | Google Cloud Run, Artifact Registry, Secret Manager |
+| CI/CD | GitHub Actions with Workload Identity Federation |
 
 ## Realtime Transport Status
 
